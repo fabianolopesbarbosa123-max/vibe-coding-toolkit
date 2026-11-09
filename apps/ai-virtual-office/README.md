@@ -47,5 +47,6 @@ Browser end-to-end flow: see [docs/quality.md](docs/quality.md).
 - [docs/supabase.md](docs/supabase.md) — schema, RLS, and Supabase configuration
 - [docs/quality.md](docs/quality.md) — what each check proves
 - [docs/execution-engine.md](docs/execution-engine.md) — execution queue, worker setup, limits
+- [docs/production-setup.md](docs/production-setup.md) — step-by-step production setup and validation
 - [docs/stage3-architecture.md](docs/stage3-architecture.md) — Stage 3 design (phase 1 done, later phases planned)
 - [AGENTS.md](AGENTS.md) — rules for coding agents

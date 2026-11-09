@@ -253,3 +253,14 @@ describe("concurrency, retries, cancellation, and timeouts", () => {
     await expect(superuser.query("update public.jobs set status = 'running' where id = $1", [claimed.id])).rejects.toThrow(/invalid job transition/);
   });
 });
+
+describe("worker capabilities", () => {
+  it("workers report provider names; users read them but cannot report or forge", async () => {
+    await worker1.query("select public.office_worker_register($1)", [["anthropic"]]);
+    const providers = await a.client.rpc("office_available_providers");
+    expect(providers.data).toContain("anthropic");
+    expect((await a.client.rpc("office_worker_register", { p_providers: ["openai"] })).error).not.toBeNull();
+    await expect(worker1.query("select public.office_worker_register($1)", [["anthropic", "sk-ant-not-a-provider"]])).rejects.toThrow(/check constraint/);
+    expect((await a.client.from("office_workers").select("*")).error).not.toBeNull();
+  });
+});

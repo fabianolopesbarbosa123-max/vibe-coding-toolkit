@@ -1,7 +1,7 @@
 import "server-only";
 import path from "node:path";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AuthMode } from "@/lib/domain";
+import type { AuthMode, Provider } from "@/lib/domain";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { getAiConfig } from "../ai/config";
 import { getEnv } from "../env";
@@ -21,6 +21,8 @@ export interface OfficeContext {
   supabase: SupabaseClient | null;
   /** Epoch ms when that JWT expires (null in local mode and for queue workers). */
   sessionExpiresAt: number | null;
+  /** Web server in Supabase mode: AI providers the queue workers reported (they hold the keys). */
+  remoteProviders?: ReadonlySet<Provider>;
   /** Queue workers only: aborts in-flight AI calls on cancellation or timeout. */
   signal?: AbortSignal;
   /** Queue workers only: failures seen during the job, used to decide on retries. */
@@ -41,6 +43,7 @@ export async function getOfficeContext(): Promise<OfficeContext> {
   if (isSupabaseConfigured) {
     const user = await requireUser();
     const supabase = createTokenClient(user.accessToken);
+    const providers = await supabase.rpc("office_available_providers");
     return {
       mode: "supabase",
       userId: user.id,
@@ -48,6 +51,7 @@ export async function getOfficeContext(): Promise<OfficeContext> {
       store: new SupabaseStore(supabase, user.id, getAiConfig().OFFICE_STALE_AFTER_MINUTES),
       supabase,
       sessionExpiresAt: user.expiresAt,
+      remoteProviders: new Set((providers.error ? [] : (providers.data as Provider[] | null)) ?? []),
     };
   }
   const env = getEnv();

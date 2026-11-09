@@ -1,0 +1,38 @@
+# systemd unit for the AI Virtual Office execution worker.
+# Install: sudo cp deploy/ai-office-worker.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# Secrets live in /etc/ai-office/worker.env (root:aioffice, mode 0640), never in this file or the repository.
+[Unit]
+Description=AI Virtual Office execution worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aioffice
+Group=aioffice
+WorkingDirectory=/opt/ai-virtual-office/apps/ai-virtual-office
+EnvironmentFile=/etc/ai-office/worker.env
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs --conditions=react-server src/worker/main.ts
+# SIGTERM returns running jobs to the queue; give them time to settle.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the worker only needs outbound HTTPS/Postgres and read access to its code.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -37,8 +37,8 @@ async function findCeo(ctx: OfficeContext, agents?: Agent[]): Promise<Agent> {
   return ceo;
 }
 
-function assertProviderAvailable(agent: Agent) {
-  const status = providerStatus(agent.provider);
+function assertProviderAvailable(ctx: OfficeContext, agent: Agent) {
+  const status = providerStatus(agent.provider, ctx.remoteProviders);
   if (!status.available) throw new IntegrationUnavailableError(agent.provider, status.detail);
 }
 
@@ -86,7 +86,7 @@ export async function prepareTaskRun(ctx: OfficeContext, taskId: string) {
   if (task.status === "running" || task.status === "completed") throw new HttpError(409, "Tarefa já executada ou em execução.");
   const agent = state.agents.find(item => item.id === task.agentId);
   if (!agent) throw new HttpError(409, "O agente responsável não existe mais.");
-  assertProviderAvailable(agent);
+  assertProviderAvailable(ctx, agent);
   await assertAdmission(ctx);
   const request = taskRequest(state, task, agent);
   await assertCallAllowed(ctx, agent, request.system, request.prompt);
@@ -143,7 +143,7 @@ export async function createProject(ctx: OfficeContext, name: string, request: s
 export async function startOrchestration(ctx: OfficeContext, request: string): Promise<{ project: Project; ceo: Agent }> {
   const state = await ctx.store.snapshot();
   const ceo = await findCeo(ctx, state.agents);
-  assertProviderAvailable(ceo);
+  assertProviderAvailable(ctx, ceo);
   await assertAdmission(ctx);
   // Same prompt the planner will send, so an over-budget request is refused before anything is created.
   await assertCallAllowed(ctx, ceo, agentSystemPrompt(ceo), planPrompt(request, state.agents.filter(agent => agent.role !== "ceo")));
@@ -223,7 +223,7 @@ export async function prepareProjectRun(ctx: OfficeContext, projectId: string): 
   if (!pending.length) throw new HttpError(409, "Não há tarefas pendentes neste projeto.");
   for (const task of pending) {
     const agent = state.agents.find(item => item.id === task.agentId);
-    if (agent) assertProviderAvailable(agent);
+    if (agent) assertProviderAvailable(ctx, agent);
   }
   await assertAdmission(ctx);
   return project;
@@ -279,7 +279,7 @@ async function summarizeProject(ctx: OfficeContext, projectId: string) {
     .filter(task => task.projectId === projectId)
     .sort((a, b) => a.order - b.order)
     .map(task => ({ task, agent: state.agents.find(agent => agent.id === task.agentId) }));
-  if (!ceo || !providerStatus(ceo.provider).available) {
+  if (!ceo || !providerStatus(ceo.provider, ctx.remoteProviders).available) {
     await store.update("projects", projectId, { status: "completed", result: null });
     await logEvent(ctx, "warning", "Projeto concluído sem resumo: integração do CEO indisponível.", { projectId });
     return;

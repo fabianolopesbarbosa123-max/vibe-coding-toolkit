@@ -75,6 +75,9 @@ npm run worker            # next to npm run dev
 
 ### Supabase cloud
 
+Step-by-step guide with dashboard paths, systemd unit, and the validation script:
+[production setup](production-setup.md). Summary:
+
 1. Apply the migrations (`npx supabase db push`).
 2. In the SQL editor, create one login role per worker host (never reuse `postgres`):
    ```sql
@@ -85,6 +88,10 @@ npm run worker            # next to npm run dev
 4. Run `npm ci && npm run worker` under a supervisor (systemd, container restart policy). It stops gracefully on
    SIGTERM: running jobs are returned to the queue.
 5. The UI shows "Nenhum worker de execução está ativo" when no worker has reported in the last 30 seconds.
+
+Workers report which AI providers they hold keys for (`office_worker_register`, names only). In Supabase mode the
+web server uses that report (`office_available_providers`, workers seen in the last 24 h) instead of its own
+environment, so the AI keys live only on worker hosts.
 
 Rotate a worker password with `alter role ... password ...`; revoke a host with `drop role` after its jobs finish.
 

@@ -32,9 +32,9 @@ export interface Generation<T> {
 
 export { providerStatus } from "./config";
 
-export function listIntegrations(storeKind: "file" | "supabase"): Integration[] {
-  const claude = providerStatus("anthropic");
-  const openai = providerStatus("openai");
+export function listIntegrations(storeKind: "file" | "supabase", remote?: ReadonlySet<Provider>): Integration[] {
+  const claude = providerStatus("anthropic", remote);
+  const openai = providerStatus("openai", remote);
   return [
     { id: "claude-api", label: "Claude API", status: claude.available ? "available" : "unavailable", detail: claude.detail },
     { id: "openai-api", label: "OpenAI API", status: openai.available ? "available" : "unavailable", detail: openai.detail },

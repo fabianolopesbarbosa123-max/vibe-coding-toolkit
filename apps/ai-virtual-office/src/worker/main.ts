@@ -5,7 +5,7 @@
  */
 import { Pool } from "pg";
 import { z } from "zod";
-import { getAiConfig } from "@/server/ai/config";
+import { configuredProviders, getAiConfig } from "@/server/ai/config";
 import { describeError } from "@/server/ai/providers";
 import type { OfficeContext } from "@/server/store";
 import { PgStore } from "./pg-store";
@@ -126,8 +126,21 @@ async function reap() {
   }
 }
 
+/** Announces this worker and the providers it holds keys for (names only, never the keys). */
+async function register() {
+  try {
+    await pool.query("select public.office_worker_register($1)", [configuredProviders()]);
+  } catch (error) {
+    log(`register failed: ${error instanceof Error ? error.message : "unknown"}`);
+  }
+}
+
 async function loop() {
-  log(`worker started (concurrency ${config.WORKER_CONCURRENCY}, lease ${config.WORKER_LEASE_SECONDS}s)`);
+  const providers = configuredProviders();
+  log(`worker started (concurrency ${config.WORKER_CONCURRENCY}, lease ${config.WORKER_LEASE_SECONDS}s, providers: ${providers.join(", ") || "none"})`);
+  if (!providers.length) log("warning: no AI provider key configured; AI jobs will fail as unavailable");
+  await register();
+  const registration = setInterval(register, 15_000);
   await reap();
   const reaper = setInterval(reap, REAP_MS);
   while (!stopping) {
@@ -145,6 +158,7 @@ async function loop() {
     await sleep(config.WORKER_POLL_MS);
   }
   clearInterval(reaper);
+  clearInterval(registration);
 }
 
 async function shutdown(signal: string) {

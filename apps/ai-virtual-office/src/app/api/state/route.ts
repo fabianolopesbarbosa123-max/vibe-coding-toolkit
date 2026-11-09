@@ -22,7 +22,7 @@ export async function GET() {
       jobs,
       workerOnline: worker,
       mode: ctx.mode,
-      integrations: listIntegrations(ctx.store.kind),
+      integrations: listIntegrations(ctx.store.kind, ctx.remoteProviders),
       stats: computeStats(state),
       storeKind: ctx.store.kind,
     };

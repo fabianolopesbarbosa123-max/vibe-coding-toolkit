@@ -55,13 +55,29 @@ export function getAiConfig(): AiConfig {
   return cached;
 }
 
+/** Providers this process can call itself (keys present), reported by workers to the database. */
+export function configuredProviders(): Provider[] {
+  return (["anthropic", "openai"] as const).filter(provider => providerStatus(provider).available);
+}
+
 /** Test hook: re-read the environment. */
 export function resetAiConfig() {
   cached = undefined;
 }
 
-export function providerStatus(provider: Provider): { available: boolean; detail: string } {
+/**
+ * Whether a provider can run calls. `remote` (web server in Supabase mode) is the set the
+ * queue workers reported, because there the workers hold the keys and make the calls;
+ * otherwise the keys in this process's environment decide.
+ */
+export function providerStatus(provider: Provider, remote?: ReadonlySet<Provider>): { available: boolean; detail: string } {
   const config = getAiConfig();
+  if (remote) {
+    const name = provider === "anthropic" ? "Claude API" : "OpenAI API";
+    return remote.has(provider)
+      ? { available: true, detail: `Configurada nos workers de execução (modelo padrão: ${provider === "anthropic" ? config.ANTHROPIC_MODEL : (config.OPENAI_MODEL ?? "—")})` }
+      : { available: false, detail: `Nenhum worker com a ${name} configurada foi visto nas últimas 24 h. Configure a chave no worker.` };
+  }
   if (provider === "anthropic") {
     return config.ANTHROPIC_API_KEY || config.ANTHROPIC_AUTH_TOKEN
       ? { available: true, detail: `Modelo padrão: ${config.ANTHROPIC_MODEL}` }
