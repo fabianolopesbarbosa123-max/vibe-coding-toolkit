@@ -142,6 +142,17 @@ export async function deleteProject(ctx: OfficeContext, projectId: string): Prom
   }
   let files: { id: string; storage_path: string }[] = [];
   if (ctx.supabase) {
+    // Checked before touching Storage: the database also refuses, but only after files were removed.
+    const jobs = await ctx.supabase
+      .from("jobs")
+      .select("id, task_id, project_id")
+      .eq("owner_id", ctx.userId)
+      .in("status", ["pending", "queued", "running", "waiting_approval"]);
+    if (jobs.error) throw new Error("Supabase jobs read failed");
+    const taskIds = new Set(state.tasks.filter(task => task.projectId === projectId).map(task => task.id));
+    if ((jobs.data ?? []).some(job => job.project_id === projectId || (job.task_id && taskIds.has(job.task_id)))) {
+      throw new HttpError(409, "O projeto tem execuções na fila ou em andamento. Cancele-as ou aguarde para excluir.");
+    }
     const { data, error } = await ctx.supabase.from("files").select("id, storage_path").eq("project_id", projectId).eq("owner_id", ctx.userId);
     if (error) throw new Error("Supabase files read failed");
     files = data ?? [];

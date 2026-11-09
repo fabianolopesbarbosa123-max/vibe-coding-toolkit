@@ -19,8 +19,14 @@ export interface OfficeContext {
   store: OfficeStore;
   /** Present in Supabase mode: a client bound to the user's JWT. */
   supabase: SupabaseClient | null;
-  /** Epoch ms when that JWT expires (null in local mode). */
+  /** Epoch ms when that JWT expires (null in local mode and for queue workers). */
   sessionExpiresAt: number | null;
+  /** Queue workers only: aborts in-flight AI calls on cancellation or timeout. */
+  signal?: AbortSignal;
+  /** Queue workers only: failures seen during the job, used to decide on retries. */
+  failures?: unknown[];
+  /** Queue workers only: mirrors activity into the job's log. */
+  jobLog?: (level: "info" | "success" | "warning" | "error", message: string, data?: Record<string, unknown>) => Promise<void>;
 }
 
 const globalStore = globalThis as typeof globalThis & { __officeFileStore?: FileStore };

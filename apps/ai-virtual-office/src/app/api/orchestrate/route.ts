@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { orchestrateInputSchema } from "@/lib/domain";
 import { errorResponse, readJson } from "@/server/http";
+import { enqueueJob } from "@/server/jobs";
 import { claimProject, executeProject, planProject, startOrchestration } from "@/server/orchestrator";
 import { getOfficeContext } from "@/server/store";
 
@@ -12,6 +13,15 @@ export async function POST(request: Request) {
     const input = await readJson(request, orchestrateInputSchema);
     const ctx = await getOfficeContext();
     const { project, ceo } = await startOrchestration(ctx, input.request);
+    if (ctx.mode === "supabase") {
+      try {
+        const job = await enqueueJob(ctx, "orchestrate", { projectId: project.id }, { autoRun: input.autoRun });
+        return NextResponse.json({ project, job }, { status: 202 });
+      } catch (error) {
+        await ctx.store.update("projects", project.id, { status: "failed", summary: "Não foi possível enfileirar o planejamento." });
+        throw error;
+      }
+    }
     after(async () => {
       const planned = await planProject(ctx, project.id, ceo);
       if (!planned || !input.autoRun) return;

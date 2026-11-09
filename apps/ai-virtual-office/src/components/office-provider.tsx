@@ -28,7 +28,7 @@ interface OfficeContextValue {
 const OfficeContext = createContext<OfficeContextValue | null>(null);
 
 /** Realtime tables that change what the office shows. RLS limits events to the owner's rows. */
-const REALTIME_TABLES = ["agents", "projects", "tasks", "activity_events", "usage_records", "files"] as const;
+const REALTIME_TABLES = ["agents", "projects", "tasks", "activity_events", "usage_records", "files", "jobs"] as const;
 const POLL_BUSY = 1500;
 const POLL_IDLE = 5000;
 const REALTIME_DEBOUNCE = 250;

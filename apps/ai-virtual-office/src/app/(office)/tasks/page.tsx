@@ -2,6 +2,7 @@
 
 import { ActivityFeed } from "@/components/activity-feed";
 import { FileManager } from "@/components/files/file-manager";
+import { JobList } from "@/components/jobs/job-list";
 import { WithSnapshot } from "@/components/page-state";
 import { ProjectForm } from "@/components/tasks/project-form";
 import { ProjectList } from "@/components/tasks/project-list";
@@ -16,6 +17,7 @@ export default function TasksPage() {
         <div className="grid gap-4">
           <h1 className="text-xl font-semibold text-slate-100">Tarefas e projetos</h1>
           <TaskBoard tasks={snapshot.tasks} agents={snapshot.agents} projects={snapshot.projects} />
+          <JobList snapshot={snapshot} />
           <div className="grid items-start gap-4 lg:grid-cols-3">
             <TaskForm />
             <div className="grid content-start gap-4">

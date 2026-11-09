@@ -35,77 +35,47 @@ function defaults(): Omit<UsageLimits, "alertPercent" | "source"> {
   };
 }
 
-const num = (value: unknown) => (value === null || value === undefined ? null : Number(value));
-
 /**
- * Effective limits: app defaults, replaced field by field by the operator's row in
- * public.usage_limits (users cannot write it), then tightened by the user's personal budget.
+ * Effective limits and usage for the context's user: app defaults, replaced field by
+ * field by the operator's row in public.usage_limits (users cannot write it), then
+ * tightened by the user's personal budget. One read through the store, so request
+ * handlers and queue workers apply the same rules.
  */
-export async function getLimits(ctx: OfficeContext): Promise<UsageLimits> {
+export async function loadBudget(ctx: OfficeContext): Promise<{ limits: UsageLimits; usage: UsageTotals }> {
   const base = defaults();
-  if (!ctx.supabase) return { ...base, alertPercent: 80, source: "default" };
-  const [operator, settings] = await Promise.all([
-    ctx.supabase.from("usage_limits").select("monthly_budget_usd, monthly_token_limit, daily_request_limit, max_concurrent_runs").eq("user_id", ctx.userId).maybeSingle(),
-    ctx.supabase.from("user_settings").select("budget_alert_percent, personal_monthly_budget_usd").eq("user_id", ctx.userId).maybeSingle(),
-  ]);
-  if (operator.error || settings.error) throw new Error("Supabase limits read failed");
-  const row = operator.data;
+  const { month, day } = periodStarts();
+  const { operator, settings, totals } = await ctx.store.budgetInputs(month, day);
   const limits: UsageLimits = {
-    monthlyBudgetUsd: num(row?.monthly_budget_usd) ?? base.monthlyBudgetUsd,
-    monthlyTokenLimit: num(row?.monthly_token_limit) ?? base.monthlyTokenLimit,
-    dailyRequestLimit: num(row?.daily_request_limit) ?? base.dailyRequestLimit,
-    maxConcurrentRuns: num(row?.max_concurrent_runs) ?? base.maxConcurrentRuns,
-    alertPercent: settings.data?.budget_alert_percent ?? 80,
-    source: row ? "operator" : "default",
+    monthlyBudgetUsd: operator?.monthlyBudgetUsd ?? base.monthlyBudgetUsd,
+    monthlyTokenLimit: operator?.monthlyTokenLimit ?? base.monthlyTokenLimit,
+    dailyRequestLimit: operator?.dailyRequestLimit ?? base.dailyRequestLimit,
+    maxConcurrentRuns: operator?.maxConcurrentRuns ?? base.maxConcurrentRuns,
+    alertPercent: settings?.budgetAlertPercent ?? 80,
+    source: operator ? "operator" : "default",
   };
-  const personal = num(settings.data?.personal_monthly_budget_usd);
+  const personal = settings?.personalMonthlyBudgetUsd ?? null;
   if (personal !== null && (limits.monthlyBudgetUsd === null || personal < limits.monthlyBudgetUsd)) {
     limits.monthlyBudgetUsd = personal;
     limits.source = "personal";
   }
-  return limits;
+  return { limits, usage: totals };
 }
 
-export async function getUsage(ctx: OfficeContext): Promise<UsageTotals> {
-  const { month, day } = periodStarts();
-  if (!ctx.supabase) {
-    const state = await ctx.store.snapshot();
-    const monthRecords = state.usage.filter(record => record.at >= month);
-    return {
-      monthCostUsd: monthRecords.reduce((sum, record) => sum + (record.costUsd ?? 0), 0),
-      monthTokens: monthRecords.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0),
-      monthRequests: monthRecords.length,
-      dayRequests: monthRecords.filter(record => record.at >= day).length,
-      unpricedRequests: monthRecords.filter(record => record.costUsd === null).length,
-      activeRuns: state.tasks.filter(task => task.status === "running").length + state.projects.filter(project => project.status === "planning").length,
-    };
-  }
-  const [summary, running, planning] = await Promise.all([
-    ctx.supabase.rpc("usage_summary", { p_month_start: month, p_day_start: day }).single(),
-    ctx.supabase.from("tasks").select("id", { count: "exact", head: true }).eq("owner_id", ctx.userId).eq("status", "running"),
-    ctx.supabase.from("projects").select("id", { count: "exact", head: true }).eq("owner_id", ctx.userId).eq("status", "planning"),
-  ]);
-  if (summary.error || running.error || planning.error) throw new Error("Supabase usage read failed");
-  const row = summary.data as Record<string, number | string>;
-  return {
-    monthCostUsd: Number(row.month_cost_usd),
-    monthTokens: Number(row.month_tokens),
-    monthRequests: Number(row.month_requests),
-    dayRequests: Number(row.day_requests),
-    unpricedRequests: Number(row.unpriced_requests),
-    activeRuns: (running.count ?? 0) + (planning.count ?? 0),
-  };
-}
+export const getLimits = async (ctx: OfficeContext) => (await loadBudget(ctx)).limits;
+export const getUsage = async (ctx: OfficeContext) => (await loadBudget(ctx)).usage;
 
 export async function getBudgetStatus(ctx: OfficeContext): Promise<BudgetStatus> {
-  const [limits, usage] = await Promise.all([getLimits(ctx), getUsage(ctx)]);
+  const { limits, usage } = await loadBudget(ctx);
   return { limits, usage, percentUsed: percentUsed(limits, usage), level: budgetLevel(limits, usage), periodStart: periodStarts().month };
 }
 
-/** Refuses to start new work when any limit is already reached. */
-export async function assertAdmission(ctx: OfficeContext, ignoreActiveRuns = 0) {
-  const [limits, usage] = await Promise.all([getLimits(ctx), getUsage(ctx)]);
-  const verdict = checkAdmission(limits, { ...usage, activeRuns: Math.max(0, usage.activeRuns - ignoreActiveRuns) });
+/**
+ * Refuses to start new work when any limit is already reached. With the execution queue
+ * (Supabase mode) concurrency is enforced when a worker claims a job, so it is not checked here.
+ */
+export async function assertAdmission(ctx: OfficeContext) {
+  const { limits, usage } = await loadBudget(ctx);
+  const verdict = checkAdmission(ctx.mode === "supabase" ? { ...limits, maxConcurrentRuns: null } : limits, usage);
   if (!verdict.ok) throw new BudgetExceededError(verdict.reason);
 }
 
@@ -122,7 +92,7 @@ export async function assertCallAllowed(ctx: OfficeContext, agent: Pick<Agent, "
     worstCostUsd: price ? worstCaseCostUsd(price, promptBytes, MAX_OUTPUT_TOKENS) : null,
     worstTokens: promptBytes + MAX_OUTPUT_TOKENS,
   };
-  const [limits, usage] = await Promise.all([getLimits(ctx), getUsage(ctx)]);
+  const { limits, usage } = await loadBudget(ctx);
   const verdict = checkCall(limits, usage, estimate);
   if (!verdict.ok) throw new BudgetExceededError(verdict.reason);
 }

@@ -4,6 +4,7 @@ import type { Agent, Project, Task, TaskStatus } from "@/lib/domain";
 import { Badge } from "@/components/ui";
 import { RunButton } from "@/components/run-button";
 import { useOffice } from "@/components/office-provider";
+import { isActiveJob, JOB_STATUS_LABELS } from "@/components/jobs/job-list";
 import { formatDate, PRIORITY_LABELS, TASK_STATUS_LABELS } from "@/lib/labels";
 import { TASK_STATUS_TONE } from "@/lib/tones";
 
@@ -41,7 +42,9 @@ export function TaskBoard({ tasks, agents, projects }: { tasks: Task[]; agents: 
 }
 
 function TaskCard({ task, agent, project }: { task: Task; agent?: Agent; project?: Project }) {
-  const cost = useOffice().snapshot?.stats.costByTask[task.id];
+  const snapshot = useOffice().snapshot;
+  const cost = snapshot?.stats.costByTask[task.id];
+  const activeJob = snapshot?.jobs.find(job => isActiveJob(job) && (job.taskId === task.id || (job.kind !== "task_run" && job.projectId === task.projectId)));
   const inProject = project && (project.status === "running" || project.status === "planning");
   return (
     <li className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
@@ -67,7 +70,10 @@ function TaskCard({ task, agent, project }: { task: Task; agent?: Agent; project
           <div className="mt-1 max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-slate-900 p-2 text-sm text-slate-300">{task.result}</div>
         </details>
       )}
-      {(task.status === "pending" || task.status === "failed") && !inProject && (
+      {activeJob && task.status !== "running" && task.status !== "completed" && (
+        <p className="mt-2 text-xs text-amber-300">{JOB_STATUS_LABELS[activeJob.status]}</p>
+      )}
+      {(task.status === "pending" || task.status === "failed") && !inProject && !activeJob && (
         <div className="mt-2 flex justify-end">
           <RunButton url={`/api/tasks/${task.id}/run`} label={task.status === "failed" ? "Tentar novamente" : "Executar"} />
         </div>

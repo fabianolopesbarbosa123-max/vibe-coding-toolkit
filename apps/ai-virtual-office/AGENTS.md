@@ -18,7 +18,8 @@ Next.js 16 (App Router, Cache Components, `proxy.ts`), React 19, strict TypeScri
 - `npm run check` — lint, typecheck (`next typegen` + `tsc`), and tests. Run before every commit.
 - `npm run build` — production build.
 - `npm run db:start` / `npm run db:reset` — local Supabase stack (Docker) / re-apply migrations.
-- `npm run test:integration` — RLS, isolation, storage, and realtime tests against the local stack.
+- `npm run test:integration` — RLS, isolation, storage, realtime, and execution-queue tests against the local stack.
+- `npm run worker` — execution queue worker (separate process; needs `WORKER_DATABASE_URL`, see docs/execution-engine.md).
 
 ## Rules
 
@@ -29,6 +30,7 @@ Next.js 16 (App Router, Cache Components, `proxy.ts`), React 19, strict TypeScri
 - Every new table has `owner_id`, RLS policies scoped to `auth.uid()`, and composite foreign keys for references. Add a new migration file; never edit an applied one. Cover policies in `src/test/integration/`.
 - Every AI call goes through `runText`/`runObject` in `src/server/ledger.ts` (budget check, usage, cost, conversation). Never call the provider SDKs elsewhere. Keys and prices live only in `src/server/ai/config.ts` and `src/lib/pricing.ts`; never invent prices.
 - Deleting data that has Storage objects removes objects first, then rows (the database enforces this order).
+- In Supabase mode, agent work runs as queue jobs, never in the web server. Workers use a Postgres role in `office_worker`, never the service-role key; job state changes only through the `office_*` functions. New data a worker must touch needs `office_worker` policies scoped by `office_holds_lease(owner_id)`.
 - Public errors use `describeError`; do not echo provider bodies, keys, or request payloads.
 - UI text is pt-BR; code, comments, and docs are English. Keep files under 350 lines.
 - Keep motion compatible with `prefers-reduced-motion`, and keep controls keyboard-accessible.

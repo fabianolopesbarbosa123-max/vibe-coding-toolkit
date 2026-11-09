@@ -1,6 +1,7 @@
-# Stage 3 architecture (plan — not implemented)
+# Stage 3 architecture
 
-This is the design for code execution. Nothing here exists in the code yet; it extends
+Status: **phase 1 (execution engine) implemented** — see [execution engine](execution-engine.md). Sections 2–10
+below are still plans. This design extends
 [architecture.md](architecture.md) without changing Stage 2 contracts (owner-scoped tables, RLS, `ledger.ts`).
 
 ## Goals and non-goals
@@ -19,7 +20,12 @@ UI ◄─Realtime── job_events, approvals, tasks                       ─�
 POST /api/approvals ─► approvals (pending → approved/denied)        ◄─wait────  tool call needing approval
 ```
 
-### 1. Job queue with per-user identity
+### 1. Job queue with per-user identity (implemented)
+
+Implemented as described, with these concrete choices: job kinds `task_run`, `project_run`, `orchestrate`;
+leases checked against `session_user`; RLS policies for `office_worker` scoped by `office_holds_lease(owner_id)`;
+the reaper also releases tasks, projects, and agents left busy by a dead worker. Budget reservation (below, section
+10) is not part of phase 1.
 
 - New owned tables: `jobs` (owner_id, project_id, task_id, kind, status, attempts, lease_until, budget_usd),
   `job_events` (append-only log), `approvals`, `workspaces`, `workspace_files`. Same RLS pattern as Stage 2.

@@ -245,3 +245,36 @@ export const fileInputSchema = z.object({
   sizeBytes: z.number().int().min(0).max(MAX_FILE_BYTES),
   projectId: z.uuid().nullable().default(null),
 });
+
+export const JOB_STATUSES = ["pending", "queued", "running", "waiting_approval", "completed", "failed", "cancelled"] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+export type JobKind = "task_run" | "project_run" | "orchestrate";
+export const ACTIVE_JOB_STATUSES: readonly JobStatus[] = ["pending", "queued", "running", "waiting_approval"];
+
+/** One execution in the persistent queue. Always owned by the user who enqueued it. */
+export interface Job {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  projectId: string | null;
+  taskId: string | null;
+  payload: Record<string, unknown>;
+  attempts: number;
+  maxAttempts: number;
+  timeoutSeconds: number;
+  nextRunAt: string;
+  cancelRequested: boolean;
+  lastError: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface JobEvent {
+  id: string;
+  jobId: string;
+  at: string;
+  level: EventLevel;
+  message: string;
+  data: Record<string, unknown> | null;
+}

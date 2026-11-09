@@ -106,6 +106,24 @@ export class FileStore implements OfficeStore {
     });
   }
 
+  budgetInputs(monthStart: string, dayStart: string) {
+    return this.run(state => {
+      const month = state.usage.filter(record => record.at >= monthStart);
+      return {
+        operator: null,
+        settings: null,
+        totals: {
+          monthCostUsd: month.reduce((sum, record) => sum + (record.costUsd ?? 0), 0),
+          monthTokens: month.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0),
+          monthRequests: month.length,
+          dayRequests: month.filter(record => record.at >= dayStart).length,
+          unpricedRequests: month.filter(record => record.costUsd === null).length,
+          activeRuns: state.tasks.filter(task => task.status === "running").length + state.projects.filter(project => project.status === "planning").length,
+        },
+      };
+    });
+  }
+
   private async apply<C extends CollectionName>(state: StoredState, collection: C, id: string, patch: Partial<Collections[C]>) {
     const list = state[collection] as Collections[C][];
     const index = list.findIndex(item => item.id === id);

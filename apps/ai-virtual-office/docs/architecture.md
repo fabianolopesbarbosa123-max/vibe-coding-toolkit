@@ -15,6 +15,9 @@ Files: upload bytes to Storage (RLS path) ─────►   ├─ orchestrat
                                                    └─ store/  SupabaseStore (user JWT, RLS) | FileStore (local mode)
 ```
 
+Since Stage 3 (phase 1), Supabase mode runs agent work through a persistent queue executed by separate worker
+processes instead of `after()`; see [execution engine](execution-engine.md).
+
 ## Modes
 
 | Mode | When | Auth | Data |
@@ -41,6 +44,8 @@ Files: upload bytes to Storage (RLS path) ─────►   ├─ orchestrat
 | `src/server/ledger.ts` | The only path to an AI call: budget check, call, usage + cost, alerts, conversation record |
 | `src/server/usage.ts`, `src/lib/budget.ts` | Effective limits (default → operator → personal), usage totals, admission and per-call checks |
 | `src/server/http.ts` | Same-origin/JSON guard, validation, error responses |
+| `src/server/jobs.ts` | User side of the execution queue: enqueue, cancel, list jobs and logs |
+| `src/worker/` | Queue worker process: claim, heartbeat, cancel, timeout, retry, reaper; `PgStore` acts for one leased user |
 | `src/components/office-provider.tsx` | Snapshot, Realtime subscription, fallback polling, toasts, connection state |
 
 ## Authorization layers
@@ -88,6 +93,9 @@ failed deletion can be retried without orphans; the database also blocks deletin
 5. Every write fires a Realtime change; open devices refetch the snapshot.
 
 ### Background runs
+
+In Supabase mode, runs are queue jobs (leases, retries, timeouts, cancellation) handled by the worker; see
+[execution engine](execution-engine.md). The paragraph below applies to local mode only.
 
 Runs started with `after()` reuse the request's access token. Before each task and the summary, a run stops
 cleanly (project → failed, "Retomar" continues it) if the token expires within 10 minutes, so writes never fail

@@ -29,6 +29,14 @@ Individual users (solo founders, developers, small team leads), each with a priv
 - Per-user AI usage control: central server-side key configuration, model allowlist, token and cost recording per call/task/project, configurable limits, budget alerts, and refusal before overspending.
 - Project deletion with confirmation that removes tasks, conversations, and Storage files without leaving orphans.
 
+## Stage 3 — phase 1: execution engine (implemented)
+
+- Persistent execution queue in Postgres; each job belongs to the authenticated user who enqueued it.
+- States pending, queued, running, waiting_approval, completed, failed, cancelled with an enforced state machine.
+- Per-user concurrency, a 50-job waiting cap, retries with backoff for transient errors, per-attempt timeouts,
+  leases with recovery from dead workers, cancellation (immediate when waiting, at the next heartbeat when running),
+  and a log of every step. Runs in a separate worker process with a least-privilege Postgres role.
+
 ## Constraints
 
 - Agents cannot browse the web, read files, or run code yet; prompts tell them so.

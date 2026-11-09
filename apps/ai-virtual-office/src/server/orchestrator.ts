@@ -12,14 +12,21 @@ const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 
 /**
- * Background runs act with the requesting user's JWT. Stop cleanly before it expires,
- * while writes still succeed, so nothing is left stuck in "running".
+ * Stops a project run cleanly between steps: when the user cancels (queue jobs) or, for
+ * `after()` runs, before the requesting user's JWT expires, so nothing stays "running".
  */
 const SESSION_MARGIN_MS = 10 * 60 * 1000;
 async function stopIfSessionEnding(ctx: OfficeContext, projectId: string): Promise<boolean> {
-  if (ctx.sessionExpiresAt === null || ctx.sessionExpiresAt - Date.now() > SESSION_MARGIN_MS) return false;
+  const cancelled = ctx.signal?.aborted ?? false;
+  const expiring = ctx.sessionExpiresAt !== null && ctx.sessionExpiresAt - Date.now() <= SESSION_MARGIN_MS;
+  if (!cancelled && !expiring) return false;
   await ctx.store.update("projects", projectId, { status: "failed" });
-  await logEvent(ctx, "warning", "Execução pausada: a sessão está perto de expirar. Use “Retomar” para continuar.", { projectId });
+  await logEvent(
+    ctx,
+    "warning",
+    cancelled ? "Execução interrompida (cancelamento ou tempo limite). Use “Retomar” para continuar." : "Execução pausada: a sessão está perto de expirar. Use “Retomar” para continuar.",
+    { projectId },
+  );
   return true;
 }
 
@@ -68,10 +75,12 @@ function taskRequest(state: OfficeState, task: Task, agent: Agent) {
   return { system: agentSystemPrompt(agent), prompt: taskPrompt(task, project, previous) };
 }
 
-/** Validates and marks a task as running so callers can return before the AI call finishes. */
-export async function claimTask(ctx: OfficeContext, taskId: string): Promise<Task> {
-  const { store } = ctx;
-  const state = await store.snapshot();
+/**
+ * Every check a task run needs before it may start (existence, state, agent, integration,
+ * budget for the exact prompt). Used when enqueuing and again when a worker claims it.
+ */
+export async function prepareTaskRun(ctx: OfficeContext, taskId: string) {
+  const state = await ctx.store.snapshot();
   const task = state.tasks.find(item => item.id === taskId);
   if (!task) throw new HttpError(404, "Tarefa não encontrada.");
   if (task.status === "running" || task.status === "completed") throw new HttpError(409, "Tarefa já executada ou em execução.");
@@ -81,6 +90,13 @@ export async function claimTask(ctx: OfficeContext, taskId: string): Promise<Tas
   await assertAdmission(ctx);
   const request = taskRequest(state, task, agent);
   await assertCallAllowed(ctx, agent, request.system, request.prompt);
+  return { task, agent };
+}
+
+/** Validates and marks a task as running so callers can return before the AI call finishes. */
+export async function claimTask(ctx: OfficeContext, taskId: string): Promise<Task> {
+  const { store } = ctx;
+  const { task, agent } = await prepareTaskRun(ctx, taskId);
   const busy = await store.claim("agents", agent.id, "status", ["idle", "done", "error"], { status: "working", currentTaskId: taskId });
   if (!busy) throw new HttpError(409, `${agent.name} está ocupado(a) com outra tarefa.`);
   const claimed = await store.claim("tasks", taskId, "status", ["pending", "failed"], { status: "running", startedAt: now(), error: null });
@@ -107,6 +123,7 @@ export async function executeTask(ctx: OfficeContext, taskId: string): Promise<T
     await logEvent(ctx, "success", `${agent.name} concluiu: ${task.title}`, { agentId: agent.id, taskId: task.id, projectId: task.projectId ?? undefined });
     return updated;
   } catch (error) {
+    ctx.failures?.push(error);
     const message = describeError(error);
     const updated = await store.update("tasks", task.id, { status: "failed", error: message, completedAt: now() });
     await store.update("agents", agent.id, { status: "error", currentTaskId: null });
@@ -185,6 +202,7 @@ export async function planProject(ctx: OfficeContext, projectId: string, ceo: Ag
     await logEvent(ctx, "success", `${ceo.name} distribuiu ${plan.tasks.length} tarefas`, { agentId: ceo.id, projectId });
     return true;
   } catch (error) {
+    ctx.failures?.push(error);
     const message = describeError(error);
     await store.update("projects", projectId, { status: "failed", summary: `Falha no planejamento: ${message}` });
     await logEvent(ctx, "error", `Planejamento falhou: ${message}`, { agentId: ceo.id, projectId });
@@ -194,10 +212,10 @@ export async function planProject(ctx: OfficeContext, projectId: string, ceo: Ag
   }
 }
 
-export async function claimProject(ctx: OfficeContext, projectId: string): Promise<Project> {
+/** Checks a project run before it is enqueued or started. */
+export async function prepareProjectRun(ctx: OfficeContext, projectId: string): Promise<Project> {
   if (activeProjects.has(projectKey(ctx, projectId))) throw new HttpError(409, "Projeto já está em execução.");
-  const { store } = ctx;
-  const state = await store.snapshot();
+  const state = await ctx.store.snapshot();
   const project = state.projects.find(item => item.id === projectId);
   if (!project) throw new HttpError(404, "Projeto não encontrado.");
   if (project.status === "planning" || project.status === "running") throw new HttpError(409, "Projeto ocupado.");
@@ -208,7 +226,12 @@ export async function claimProject(ctx: OfficeContext, projectId: string): Promi
     if (agent) assertProviderAvailable(agent);
   }
   await assertAdmission(ctx);
-  const claimed = await store.claim("projects", projectId, "status", ["ready", "failed"], { status: "running" });
+  return project;
+}
+
+export async function claimProject(ctx: OfficeContext, projectId: string): Promise<Project> {
+  await prepareProjectRun(ctx, projectId);
+  const claimed = await ctx.store.claim("projects", projectId, "status", ["ready", "failed"], { status: "running" });
   if (!claimed) throw new HttpError(409, "Projeto ocupado.");
   activeProjects.add(projectKey(ctx, projectId));
   return claimed;
@@ -230,6 +253,7 @@ export async function executeProject(ctx: OfficeContext, projectId: string) {
         await claimTask(ctx, task.id);
         result = await executeTask(ctx, task.id);
       } catch (error) {
+        ctx.failures?.push(error);
         const message = describeError(error);
         result = await store.update("tasks", task.id, { status: "failed", error: message, completedAt: now() });
         await logEvent(ctx, "error", `Não foi possível iniciar "${task.title}": ${message}`, { taskId: task.id, projectId });
@@ -269,6 +293,7 @@ async function summarizeProject(ctx: OfficeContext, projectId: string) {
     await store.update("agents", ceo.id, { status: "done" });
     await logEvent(ctx, "success", `${ceo.name} apresentou o resultado de "${project.name}"`, { agentId: ceo.id, projectId });
   } catch (error) {
+    ctx.failures?.push(error);
     const message = describeError(error);
     await store.update("projects", projectId, { status: "completed", result: null });
     await store.update("agents", ceo.id, { status: "error" });

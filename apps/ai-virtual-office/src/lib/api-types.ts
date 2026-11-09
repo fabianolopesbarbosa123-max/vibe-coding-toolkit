@@ -1,4 +1,4 @@
-import type { AuthMode, Integration, OfficeFile, OfficeState, Profile, UserSettings } from "./domain";
+import type { AuthMode, Integration, Job, OfficeFile, OfficeState, Profile, UserSettings } from "./domain";
 import type { BudgetStatus } from "./budget";
 import type { OfficeStats } from "./stats";
 
@@ -11,4 +11,8 @@ export interface OfficeSnapshot extends OfficeState {
   settings: UserSettings;
   files: OfficeFile[];
   budget: BudgetStatus;
+  /** Recent executions (Supabase mode); empty in local mode. */
+  jobs: Job[];
+  /** Whether a queue worker reported in the last 30 s (null in local mode). */
+  workerOnline: boolean | null;
 }

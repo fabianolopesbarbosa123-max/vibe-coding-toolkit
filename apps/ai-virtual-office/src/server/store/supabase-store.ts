@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AgentRole, OfficeState } from "@/lib/domain";
 import { createSeedState } from "@/lib/seed";
-import { EVENT_LIMIT, USAGE_LIMIT, type CollectionName, type Collections, type OfficeStore } from "./types";
+import { EVENT_LIMIT, USAGE_LIMIT, type BudgetInputs, type CollectionName, type Collections, type OfficeStore } from "./types";
 
 const lastRecovery = new Map<string, number>();
 
@@ -24,7 +24,7 @@ export function mapKeys<T>(record: object, convert: (key: string) => string): T 
 }
 
 /** Rows carry owner_id in the database; the app's domain objects do not. */
-function fromRow<T>(row: Record<string, unknown>): T {
+export function fromRow<T>(row: Record<string, unknown>): T {
   const { owner_id: _owner, ...rest } = row;
   void _owner;
   const mapped = mapKeys<Record<string, unknown>>(rest, toCamel);
@@ -156,4 +156,46 @@ export class SupabaseStore implements OfficeStore {
     if (error) this.fail("projects", "delete", error.message);
     return (data ?? []).length === 1;
   }
+
+  async budgetInputs(monthStart: string, dayStart: string): Promise<BudgetInputs> {
+    const [operator, settings, summary, active] = await Promise.all([
+      this.client.from("usage_limits").select("monthly_budget_usd, monthly_token_limit, daily_request_limit, max_concurrent_runs").eq("user_id", this.ownerId).maybeSingle(),
+      this.client.from("user_settings").select("budget_alert_percent, personal_monthly_budget_usd").eq("user_id", this.ownerId).maybeSingle(),
+      this.client.rpc("usage_summary", { p_month_start: monthStart, p_day_start: dayStart }).single(),
+      this.client.from("jobs").select("id", { count: "exact", head: true }).eq("owner_id", this.ownerId).in("status", ["running", "waiting_approval"]),
+    ]);
+    if (operator.error || settings.error || summary.error || active.error) throw new Error("Supabase budget read failed");
+    return budgetInputsFromRows(operator.data, settings.data, summary.data as Record<string, unknown>, active.count ?? 0);
+  }
+}
+
+const num = (value: unknown) => (value === null || value === undefined ? null : Number(value));
+
+/** Shared by the Supabase (REST) and Postgres (worker) stores. */
+export function budgetInputsFromRows(
+  operator: Record<string, unknown> | null,
+  settings: Record<string, unknown> | null,
+  summary: Record<string, unknown>,
+  activeRuns: number,
+): BudgetInputs {
+  return {
+    operator: operator && {
+      monthlyBudgetUsd: num(operator.monthly_budget_usd),
+      monthlyTokenLimit: num(operator.monthly_token_limit),
+      dailyRequestLimit: num(operator.daily_request_limit),
+      maxConcurrentRuns: num(operator.max_concurrent_runs),
+    },
+    settings: settings && {
+      budgetAlertPercent: Number(settings.budget_alert_percent ?? 80),
+      personalMonthlyBudgetUsd: num(settings.personal_monthly_budget_usd),
+    },
+    totals: {
+      monthCostUsd: Number(summary.month_cost_usd ?? 0),
+      monthTokens: Number(summary.month_tokens ?? 0),
+      monthRequests: Number(summary.month_requests ?? 0),
+      dayRequests: Number(summary.day_requests ?? 0),
+      unpricedRequests: Number(summary.unpriced_requests ?? 0),
+      activeRuns,
+    },
+  };
 }

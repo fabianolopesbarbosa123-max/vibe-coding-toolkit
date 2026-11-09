@@ -89,6 +89,7 @@ export async function generateText(
   agent: Pick<Agent, "provider" | "model">,
   system: string,
   prompt: string,
+  signal?: AbortSignal,
 ): Promise<Generation<string>> {
   const model = resolveModel(agent);
   if (agent.provider === "anthropic") {
@@ -98,7 +99,7 @@ export async function generateText(
       system,
       messages: [{ role: "user", content: prompt }],
       ...anthropicExtras(model),
-    });
+    }, { signal });
     assertNotRefused(response.stop_reason);
     const output = response.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n").trim();
     return {
@@ -110,7 +111,7 @@ export async function generateText(
       billed: anthropicBilling(response.usage, response.model),
     };
   }
-  const response = await openai().responses.create({ model, instructions: system, input: prompt, max_output_tokens: MAX_OUTPUT_TOKENS });
+  const response = await openai().responses.create({ model, instructions: system, input: prompt, max_output_tokens: MAX_OUTPUT_TOKENS }, { signal });
   return {
     output: response.output_text.trim(),
     provider: "openai",
@@ -126,6 +127,7 @@ export async function generateObject<T extends z.ZodType>(
   system: string,
   prompt: string,
   schema: T,
+  signal?: AbortSignal,
 ): Promise<Generation<z.infer<T>>> {
   const model = resolveModel(agent);
   if (agent.provider === "anthropic") {
@@ -136,7 +138,7 @@ export async function generateObject<T extends z.ZodType>(
       messages: [{ role: "user", content: prompt }],
       output_config: { format: betaZodOutputFormat(schema) },
       ...anthropicExtras(model),
-    });
+    }, { signal });
     assertNotRefused(response.stop_reason);
     if (!response.parsed_output) throw new Error("O modelo não retornou um plano válido.");
     return {
@@ -154,7 +156,7 @@ export async function generateObject<T extends z.ZodType>(
     input: prompt,
     text: { format: zodTextFormat(schema, "plan") },
     max_output_tokens: MAX_OUTPUT_TOKENS,
-  });
+  }, { signal });
   if (!response.output_parsed) throw new Error("O modelo não retornou um plano válido.");
   return {
     output: response.output_parsed as z.infer<T>,
@@ -166,9 +168,28 @@ export async function generateObject<T extends z.ZodType>(
   };
 }
 
+/** Transient provider failures worth retrying later: network, rate limit, overload, server errors. */
+export function isRetryableError(error: unknown): boolean {
+  if (error instanceof Anthropic.APIUserAbortError || error instanceof OpenAI.APIUserAbortError) return false;
+  if (error instanceof Anthropic.APIConnectionError || error instanceof OpenAI.APIConnectionError) return true;
+  if (error instanceof Anthropic.APIError || error instanceof OpenAI.APIError) {
+    return error.status === 408 || error.status === 409 || error.status === 429 || (error.status !== undefined && error.status >= 500);
+  }
+  return false;
+}
+
+export function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Anthropic.APIUserAbortError ||
+    error instanceof OpenAI.APIUserAbortError ||
+    (error instanceof Error && error.name === "AbortError")
+  );
+}
+
 /** Public, bounded error text. Never includes request bodies or credentials. */
 export function describeError(error: unknown): string {
   if (error instanceof IntegrationUnavailableError) return error.message;
+  if (isAbortError(error)) return "Execução cancelada ou interrompida pelo tempo limite.";
   if (error instanceof Error && error.name === "BudgetExceededError") return error.message;
   if (error instanceof Anthropic.APIConnectionError || error instanceof OpenAI.APIConnectionError) {
     return "Falha de conexão com o provedor de IA.";

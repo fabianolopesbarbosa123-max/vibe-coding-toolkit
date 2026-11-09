@@ -12,6 +12,8 @@ npm install
 npm run db:start             # local Supabase; prints API_URL and PUBLISHABLE_KEY
 cp .env.example .env.local   # fill NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, ANTHROPIC_API_KEY
 npm run dev                  # http://127.0.0.1:3000
+# in another terminal: the execution worker (see docs/execution-engine.md for the one-time role setup)
+npm run worker
 ```
 
 Create an account at `/signup`; the confirmation e-mail appears in Mailpit (http://127.0.0.1:54324).
@@ -44,5 +46,6 @@ Browser end-to-end flow: see [docs/quality.md](docs/quality.md).
 - [docs/architecture.md](docs/architecture.md) — modules, authorization layers, execution flow
 - [docs/supabase.md](docs/supabase.md) — schema, RLS, and Supabase configuration
 - [docs/quality.md](docs/quality.md) — what each check proves
-- [docs/stage3-architecture.md](docs/stage3-architecture.md) — planned code-execution architecture
+- [docs/execution-engine.md](docs/execution-engine.md) — execution queue, worker setup, limits
+- [docs/stage3-architecture.md](docs/stage3-architecture.md) — Stage 3 design (phase 1 done, later phases planned)
 - [AGENTS.md](AGENTS.md) — rules for coding agents

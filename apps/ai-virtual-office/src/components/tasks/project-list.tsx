@@ -21,7 +21,8 @@ export function ProjectList({ projects, tasks, limit }: { projects: Project[]; t
       {items.map(project => {
         const own = tasks.filter(task => task.projectId === project.id);
         const done = own.filter(task => task.status === "completed").length;
-        const runnable = (project.status === "ready" || project.status === "failed") && own.some(task => task.status !== "completed");
+        const queued = snapshot?.jobs.some(job => job.projectId === project.id && job.kind !== "task_run" && ["pending", "queued", "running", "waiting_approval"].includes(job.status));
+        const runnable = !queued && (project.status === "ready" || project.status === "failed") && own.some(task => task.status !== "completed");
         const progress = own.length ? Math.round((done / own.length) * 100) : 0;
         return (
           <li key={project.id} className="rounded-xl border border-white/10 bg-slate-950/50 p-3">

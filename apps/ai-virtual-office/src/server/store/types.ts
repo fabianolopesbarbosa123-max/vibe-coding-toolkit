@@ -8,6 +8,7 @@ import type {
   Task,
   UsageRecord,
 } from "@/lib/domain";
+import type { UsageTotals } from "@/lib/budget";
 
 export interface Collections {
   agents: Agent;
@@ -51,6 +52,14 @@ export interface OfficeStore {
    * Usage and activity history are kept. Files must be removed first (see account.ts).
    */
   deleteProject(projectId: string): Promise<boolean>;
+  /** Raw inputs for budget checks: operator limits, user settings, and usage totals. */
+  budgetInputs(monthStart: string, dayStart: string): Promise<BudgetInputs>;
+}
+
+export interface BudgetInputs {
+  operator: { monthlyBudgetUsd: number | null; monthlyTokenLimit: number | null; dailyRequestLimit: number | null; maxConcurrentRuns: number | null } | null;
+  settings: { budgetAlertPercent: number; personalMonthlyBudgetUsd: number | null } | null;
+  totals: UsageTotals;
 }
 
 /** Bounds keep snapshots small; full history lives in the database. */

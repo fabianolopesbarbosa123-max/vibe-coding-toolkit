@@ -6,7 +6,7 @@ import { estimateCostUsd } from "@/lib/pricing";
 import { getAiConfig } from "./ai/config";
 import { generateObject, generateText, type Generation } from "./ai/providers";
 import type { OfficeContext } from "./store";
-import { assertCallAllowed, getLimits, getUsage } from "./usage";
+import { assertCallAllowed, loadBudget } from "./usage";
 
 /**
  * Every AI call goes through here: budget check before sending, then usage, cost,
@@ -32,6 +32,25 @@ export async function logEvent(ctx: OfficeContext, level: EventLevel, message: s
     agentId: refs.agentId ?? null,
     taskId: refs.taskId ?? null,
     projectId: refs.projectId ?? null,
+  });
+  await ctx.jobLog?.(level, message);
+}
+
+function throwIfAborted(ctx: OfficeContext) {
+  if (ctx.signal?.aborted) {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  }
+}
+
+async function logCall(ctx: OfficeContext, agent: Agent, generation: Generation<unknown>) {
+  const tokens = generation.billed.reduce((sum, attempt) => sum + attempt.inputTokens + attempt.outputTokens, 0);
+  const cost = generationCost(generation);
+  await ctx.jobLog?.("info", `Chamada de IA (${agent.name}, ${generation.model}): ${tokens} tokens${cost === null ? ", sem preço" : `, US$ ${cost.toFixed(4)}`}.`, {
+    model: generation.model,
+    tokens,
+    costUsd: cost,
   });
 }
 
@@ -68,7 +87,7 @@ async function recordUsage(ctx: OfficeContext, refs: CallRefs, generation: Gener
 
 async function alertOnThreshold(ctx: OfficeContext, call: { costUsd: number; tokens: number }) {
   try {
-    const [limits, after] = await Promise.all([getLimits(ctx), getUsage(ctx)]);
+    const { limits, usage: after } = await loadBudget(ctx);
     const before: UsageTotals = { ...after, monthCostUsd: after.monthCostUsd - call.costUsd, monthTokens: after.monthTokens - call.tokens };
     const crossed = crossedThreshold(limits, before, after);
     if (crossed === "warning") {
@@ -92,16 +111,20 @@ async function recordConversation(ctx: OfficeContext, kind: ConversationKind, re
 
 export async function runText(ctx: OfficeContext, kind: ConversationKind, agent: Agent, refs: CallRefs, system: string, prompt: string) {
   await assertCallAllowed(ctx, agent, system, prompt);
-  const generation = await generateText(agent, system, prompt);
+  throwIfAborted(ctx);
+  const generation = await generateText(agent, system, prompt, ctx.signal);
   await recordUsage(ctx, refs, generation);
   await recordConversation(ctx, kind, refs, system, prompt, generation.output);
+  await logCall(ctx, agent, generation);
   return generation;
 }
 
 export async function runObject<T extends z.ZodType>(ctx: OfficeContext, agent: Agent, refs: CallRefs, system: string, prompt: string, schema: T) {
   await assertCallAllowed(ctx, agent, system, prompt);
-  const generation = await generateObject(agent, system, prompt, schema);
+  throwIfAborted(ctx);
+  const generation = await generateObject(agent, system, prompt, schema, ctx.signal);
   await recordUsage(ctx, refs, generation);
   await recordConversation(ctx, "planning", refs, system, prompt, JSON.stringify(generation.output, null, 2));
+  await logCall(ctx, agent, generation);
   return generation;
 }

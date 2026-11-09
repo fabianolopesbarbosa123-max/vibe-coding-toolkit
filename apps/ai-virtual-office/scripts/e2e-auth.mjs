@@ -228,6 +228,60 @@ if (secretKey) {
 }
 
 if (secretKey && aiFixture) {
+  const waitForJob = async (predicate, timeoutMs = 60_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const snapshot = await state(page);
+      const job = snapshot.jobs.find(predicate);
+      if (job) return { job, snapshot };
+      await page.waitForTimeout(500);
+    }
+    throw new Error("job condition not reached");
+  };
+
+  await step("queue: a task run is enqueued, executed by the worker, and logged", async () => {
+    const title = `Tarefa na fila ${run}`;
+    await page.goto(`${app}/tasks`);
+    await page.getByRole("textbox", { name: "Nome" }).first().fill(title);
+    await page.getByLabel("Descrição").fill("Executada pelo worker");
+    await page.getByLabel("Agente responsável").selectOption({ label: "Rafael — Programador" });
+    await page.getByRole("button", { name: "Criar tarefa" }).click();
+    await page.getByRole("status").filter({ hasText: "Tarefa criada." }).waitFor();
+    const task = (await state(page)).tasks.find(item => item.title === title);
+    await page.locator("li", { hasText: title }).getByRole("button", { name: "Executar" }).click();
+    await page.getByRole("status").filter({ hasText: "Execução iniciada." }).waitFor();
+    const { job, snapshot } = await waitForJob(item => item.taskId === task.id && item.status === "completed");
+    assert.equal(snapshot.tasks.find(item => item.id === task.id).status, "completed");
+    const logs = (await (await page.request.get(`${app}/api/jobs/${job.id}/events`)).json()).events.map(event => event.message);
+    for (const expected of ["Execução enfileirada.", "Estado: queued → running", "Estado: running → completed"]) assert.ok(logs.includes(expected), expected);
+    assert.ok(logs.some(message => /^Chamada de IA \(Rafael/.test(message)), "AI call logged");
+    await page.getByRole("button", { name: "Logs" }).first().click();
+    await page.getByLabel("Logs da execução").waitFor();
+  });
+
+  await step("queue: cancelling a running project stops it between steps", async () => {
+    await page.goto(`${app}/`);
+    await page.getByLabel("Solicitação para o CEO").fill("Projeto para cancelar");
+    await page.getByRole("button", { name: "Enviar ao CEO" }).click();
+    const { job } = await waitForJob(item => item.kind === "orchestrate" && item.status === "running");
+    await waitForJob(() => true).then(async () => {
+      for (let attempt = 0; attempt < 120; attempt++) {
+        const snapshot = await state(page);
+        if (snapshot.tasks.some(task => task.projectId === job.projectId && task.status === "completed")) return;
+        await page.waitForTimeout(250);
+      }
+      throw new Error("no task completed");
+    });
+    await page.goto(`${app}/tasks`);
+    await page.getByRole("button", { name: /^Cancelar execução: / }).first().click();
+    const done = await waitForJob(item => item.id === job.id && item.status === "cancelled", 30_000);
+    const project = done.snapshot.projects.find(item => item.id === job.projectId);
+    assert.equal(project.status, "failed");
+    assert.equal(project.result, null, "summary not produced after cancellation");
+    const remaining = done.snapshot.tasks.filter(task => task.projectId === job.projectId && task.status !== "completed");
+    assert.ok(remaining.length > 0, "later tasks did not run");
+  });
+
   await step("usage control: per-project cost, budget alert, and refusal before spending", async () => {
     const me = (await state(page)).profile.id;
     assert.equal((await setLimits(me, { monthly_budget_usd: 0.5 })).status < 300, true);
@@ -236,16 +290,17 @@ if (secretKey && aiFixture) {
     await page.getByRole("button", { name: "Salvar alterações" }).click();
     await page.getByRole("status").filter({ hasText: "Perfil atualizado." }).waitFor();
     await page.goto(`${app}/`);
+    const known = new Set((await state(page)).projects.map(item => item.id));
     await page.getByLabel("Solicitação para o CEO").fill("Planeje um app de finanças");
     await page.getByRole("button", { name: "Enviar ao CEO" }).click();
     let snapshot;
-    for (let attempt = 0; attempt < 60; attempt++) {
+    let project;
+    for (let attempt = 0; attempt < 90; attempt++) {
       snapshot = await state(page);
-      const latest = snapshot.projects.at(-1);
-      if (latest && (latest.status === "completed" || latest.status === "failed")) break;
+      project = snapshot.projects.find(item => !known.has(item.id));
+      if (project && (project.status === "completed" || project.status === "failed")) break;
       await page.waitForTimeout(1000);
     }
-    const project = snapshot.projects.at(-1);
     assert.equal(project.status, "completed", project.summary ?? "");
     assert.ok(snapshot.stats.costByProject[project.id] > 0, "cost recorded for the project");
     assert.ok(snapshot.budget.usage.monthCostUsd > 0.05);
