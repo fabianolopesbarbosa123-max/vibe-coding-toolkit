@@ -92,6 +92,20 @@ export class FileStore implements OfficeStore {
     });
   }
 
+  deleteProject(projectId: string) {
+    return this.run(async state => {
+      const project = state.projects.find(item => item.id === projectId);
+      if (!project || project.status === "planning" || project.status === "running") return false;
+      const conversations = new Set(state.conversations.filter(item => item.projectId === projectId).map(item => item.id));
+      state.projects = state.projects.filter(item => item.id !== projectId);
+      state.tasks = state.tasks.filter(item => item.projectId !== projectId);
+      state.conversations = state.conversations.filter(item => !conversations.has(item.id));
+      state.messages = state.messages.filter(item => !conversations.has(item.conversationId));
+      await this.persist();
+      return true;
+    });
+  }
+
   private async apply<C extends CollectionName>(state: StoredState, collection: C, id: string, patch: Partial<Collections[C]>) {
     const list = state[collection] as Collections[C][];
     const index = list.findIndex(item => item.id === id);

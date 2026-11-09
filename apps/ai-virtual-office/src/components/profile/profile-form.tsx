@@ -56,6 +56,23 @@ export function ProfileForm({ snapshot }: { snapshot: OfficeSnapshot }) {
               </select>
             </Field>
           </fieldset>
+          <fieldset className="grid gap-3 rounded-xl border border-white/10 p-3">
+            <legend className="px-1 text-sm font-medium text-slate-300">Orçamento de IA</legend>
+            <Field label="Alertar ao atingir (% do limite mensal)">
+              <input type="number" min={1} max={100} required disabled={!editable} value={settings.budgetAlertPercent} onChange={event => setSettings(current => ({ ...current, budgetAlertPercent: Number(event.target.value) }))} className={inputClass} />
+            </Field>
+            <Field label="Meu limite mensal (US$, opcional)" hint={`Só pode reduzir o limite definido pelo administrador${snapshot.budget.limits.monthlyBudgetUsd !== null && snapshot.budget.limits.source !== "personal" ? ` (atual: US$ ${snapshot.budget.limits.monthlyBudgetUsd.toFixed(2)})` : ""}. Deixe vazio para usar o limite do administrador.`}>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                disabled={!editable}
+                value={settings.personalMonthlyBudgetUsd ?? ""}
+                onChange={event => setSettings(current => ({ ...current, personalMonthlyBudgetUsd: event.target.value === "" ? null : Number(event.target.value) }))}
+                className={inputClass}
+              />
+            </Field>
+          </fieldset>
           <ErrorText>{error}</ErrorText>
           {editable ? (
             <Button type="submit" disabled={pending}>{pending ? "Salvando…" : "Salvar alterações"}</Button>

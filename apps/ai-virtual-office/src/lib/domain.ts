@@ -97,6 +97,8 @@ export interface UsageRecord {
   at: string;
   agentId: string;
   taskId: string | null;
+  /** Kept after the project is deleted so usage history and budgets stay accurate. */
+  projectId: string | null;
   provider: Provider;
   model: string;
   inputTokens: number;
@@ -200,6 +202,10 @@ export interface UserSettings {
   autoRun: boolean;
   reducedMotion: boolean;
   defaultProvider: Provider;
+  /** Percent of a monthly limit that raises a budget alert. */
+  budgetAlertPercent: number;
+  /** Optional personal cap; can only tighten the operator's budget. */
+  personalMonthlyBudgetUsd: number | null;
 }
 
 /** "supabase": multi-user with auth; "local": single-user file store for development. */
@@ -212,6 +218,8 @@ export const profilePatchSchema = z.object({
       autoRun: z.boolean(),
       reducedMotion: z.boolean(),
       defaultProvider: z.enum(PROVIDERS),
+      budgetAlertPercent: z.number().int().min(1).max(100),
+      personalMonthlyBudgetUsd: z.number().min(0).max(1_000_000).nullable(),
     })
     .partial()
     .optional(),

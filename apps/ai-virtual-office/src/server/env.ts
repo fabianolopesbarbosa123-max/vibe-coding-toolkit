@@ -6,18 +6,9 @@ const optional = z
   .trim()
   .optional()
   .transform(value => value || undefined);
-const optionalNumber = optional
-  .transform(value => (value === undefined ? undefined : Number(value)))
-  .pipe(z.number().nonnegative().optional());
 
+/** Non-AI server settings. AI keys, models, prices, and limits live in ai/config.ts. */
 const envSchema = z.object({
-  ANTHROPIC_API_KEY: optional,
-  ANTHROPIC_AUTH_TOKEN: optional,
-  ANTHROPIC_MODEL: optional.transform(value => value ?? "claude-opus-5-5"),
-  OPENAI_API_KEY: optional,
-  OPENAI_MODEL: optional,
-  OPENAI_INPUT_PRICE_PER_MTOK: optionalNumber,
-  OPENAI_OUTPUT_PRICE_PER_MTOK: optionalNumber,
   OFFICE_LOCAL_MODE: optional.transform(value => value === "true"),
   OFFICE_DATA_FILE: optional.transform(value => value ?? ".data/office.json"),
 });

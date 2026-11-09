@@ -4,6 +4,8 @@ import type { AgentRole, OfficeState } from "@/lib/domain";
 import { createSeedState } from "@/lib/seed";
 import { EVENT_LIMIT, USAGE_LIMIT, type CollectionName, type Collections, type OfficeStore } from "./types";
 
+const lastRecovery = new Map<string, number>();
+
 export const TABLES: Record<CollectionName, string> = {
   agents: "agents",
   projects: "projects",
@@ -50,7 +52,21 @@ export class SupabaseStore implements OfficeStore {
   constructor(
     private readonly client: SupabaseClient,
     readonly ownerId: string,
+    private readonly staleAfterMinutes = 20,
   ) {}
+
+  /**
+   * Fails work that stopped reporting progress (server restart, expired session), so it
+   * can be retried. Throttled per user and process; RLS limits it to the caller's rows.
+   */
+  private async recoverStale() {
+    const key = this.ownerId;
+    const last = lastRecovery.get(key) ?? 0;
+    if (Date.now() - last < 60_000) return;
+    lastRecovery.set(key, Date.now());
+    const { error } = await this.client.rpc("recover_stale_work", { p_stale_after: `${this.staleAfterMinutes} minutes` });
+    if (error) throw new Error(`Supabase stale-work recovery failed: ${error.message}`);
+  }
 
   private table(collection: CollectionName) {
     return this.client.from(TABLES[collection]);
@@ -84,6 +100,7 @@ export class SupabaseStore implements OfficeStore {
 
   async snapshot(): Promise<OfficeState> {
     await this.ensureSeed();
+    await this.recoverStale();
     const [agents, projects, tasks, events, usage] = await Promise.all([
       this.select("agents", "created_at"),
       this.select("projects", "created_at"),
@@ -127,5 +144,16 @@ export class SupabaseStore implements OfficeStore {
       .maybeSingle();
     if (error) this.fail(collection, "claim", error.message);
     return data ? fromRow<Collections[C]>(data) : null;
+  }
+
+  async deleteProject(projectId: string) {
+    const { data, error } = await this.table("projects")
+      .delete()
+      .eq("id", projectId)
+      .eq("owner_id", this.ownerId)
+      .not("status", "in", "(planning,running)")
+      .select("id");
+    if (error) this.fail("projects", "delete", error.message);
+    return (data ?? []).length === 1;
   }
 }

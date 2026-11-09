@@ -136,18 +136,133 @@ describe("atomic claims", () => {
   });
 });
 
+/** Metadata first (required by the Storage policy), then the object. */
+async function uploadOwned(user: TestUser, name: string, projectId: string | null = null) {
+  const id = crypto.randomUUID();
+  const path = `${user.id}/${id}/${name}`;
+  const row = await user.client.from("files").insert({ id, owner_id: user.id, project_id: projectId, name, storage_path: path, mime_type: "text/plain", size_bytes: 7 });
+  if (row.error) throw row.error;
+  const up = await user.client.storage.from("office-files").upload(path, new Blob(["segredo"], { type: "text/plain" }));
+  if (up.error) throw up.error;
+  return { id, path };
+}
+
 describe("storage", () => {
   it("keeps each user's files private", async () => {
     const path = `${a.id}/${crypto.randomUUID()}/nota.txt`;
+    await a.client.from("files").insert({ owner_id: a.id, name: "nota.txt", storage_path: path, mime_type: "text/plain", size_bytes: 7 });
     const up = await a.client.storage.from("office-files").upload(path, new Blob(["segredo"], { type: "text/plain" }));
     expect(up.error).toBeNull();
     const steal = await b.client.storage.from("office-files").download(path);
     expect(steal.error).not.toBeNull();
     const plant = await b.client.storage.from("office-files").upload(`${a.id}/x/plant.txt`, new Blob(["x"], { type: "text/plain" }));
     expect(plant.error).not.toBeNull();
-    const meta = await b.client.from("files").insert({ owner_id: b.id, name: "x", storage_path: path, mime_type: "text/plain", size_bytes: 1 });
+    const meta = await b.client.from("files").insert({ owner_id: b.id, name: "x", storage_path: `${a.id}/y/z.txt`, mime_type: "text/plain", size_bytes: 1 });
     expect(meta.error).not.toBeNull(); // path must start with the owner's id
+    const removeOther = await b.client.storage.from("office-files").remove([path]);
+    expect(removeOther.data).toEqual([]);
     expect((await a.client.storage.from("office-files").download(path)).error).toBeNull();
+  });
+
+  it("rejects objects without a metadata row and types outside the allowlist", async () => {
+    const orphan = await a.client.storage.from("office-files").upload(`${a.id}/${crypto.randomUUID()}/x.txt`, new Blob(["x"], { type: "text/plain" }));
+    expect(orphan.error).not.toBeNull();
+    const id = crypto.randomUUID();
+    const exePath = `${a.id}/${id}/m.exe`;
+    await a.client.from("files").insert({ id, owner_id: a.id, name: "m.exe", storage_path: exePath, mime_type: "text/plain", size_bytes: 2 });
+    const exe = await a.client.storage.from("office-files").upload(exePath, new Blob(["MZ"], { type: "application/x-msdownload" }));
+    expect(exe.error).not.toBeNull();
+  });
+
+  it("keeps metadata until the object is gone and never lets storage_path move", async () => {
+    const file = await uploadOwned(a, "consistente.txt");
+    const early = await a.client.from("files").delete().eq("id", file.id).select("id");
+    expect(early.data).toEqual([]); // object still exists
+    const move = await a.client.from("files").update({ storage_path: `${a.id}/outro/x.txt` }).eq("id", file.id);
+    expect(move.error).not.toBeNull();
+    await a.client.storage.from("office-files").remove([file.path]);
+    const late = await a.client.from("files").delete().eq("id", file.id).select("id");
+    expect(late.data).toHaveLength(1);
+  });
+});
+
+describe("project deletion", () => {
+  it("is refused while files exist and leaves no orphan objects when done in order", async () => {
+    const p = project("Com arquivos");
+    await storeA.insert("projects", p);
+    const agentId = (await storeA.snapshot()).agents[0].id;
+    await a.client.from("tasks").insert({ owner_id: a.id, project_id: p.id, agent_id: agentId, title: "t", description: "d", priority: "low", status: "pending" });
+    const file = await uploadOwned(a, "anexo.txt", p.id);
+
+    const direct = await a.client.from("projects").delete().eq("id", p.id);
+    expect(direct.error?.code).toBe("23503"); // restrict: files first
+
+    await a.client.storage.from("office-files").remove([file.path]);
+    await a.client.from("files").delete().eq("id", file.id);
+    expect(await storeA.deleteProject(p.id)).toBe(true);
+    expect((await a.client.from("tasks").select("id").eq("project_id", p.id)).data).toEqual([]);
+    const listing = await admin.storage.from("office-files").list(`${a.id}/${file.id}`);
+    expect(listing.data ?? []).toEqual([]);
+  });
+
+  it("cannot be performed on another user's project", async () => {
+    const p = project("Da A");
+    await storeA.insert("projects", p);
+    expect(await storeB.deleteProject(p.id)).toBe(false);
+    expect((await a.client.from("projects").select("id").eq("id", p.id)).data).toHaveLength(1);
+  });
+});
+
+describe("cross-user writes on every owned table", () => {
+  it("cannot read, update, or delete another user's tasks, conversations, or messages", async () => {
+    const agentId = (await storeA.snapshot()).agents[0].id;
+    const task = await a.client.from("tasks").insert({ owner_id: a.id, agent_id: agentId, title: "t", description: "d", priority: "low", status: "pending" }).select().single();
+    const conversation = await a.client.from("agent_conversations").insert({ owner_id: a.id, agent_id: agentId, task_id: task.data!.id, kind: "task" }).select().single();
+    await a.client.from("agent_messages").insert({ owner_id: a.id, conversation_id: conversation.data!.id, role: "assistant", content: "privado" });
+    for (const [table, column, id] of [
+      ["tasks", "id", task.data!.id],
+      ["agent_conversations", "id", conversation.data!.id],
+      ["agent_messages", "conversation_id", conversation.data!.id],
+    ] as const) {
+      expect((await b.client.from(table).select("*").eq(column, id)).data).toEqual([]);
+      expect((await b.client.from(table).update({ owner_id: b.id }).eq(column, id).select()).data).toEqual([]);
+      expect((await b.client.from(table).delete().eq(column, id).select()).data).toEqual([]);
+      expect((await a.client.from(table).select("*").eq(column, id)).data).toHaveLength(1);
+    }
+    const moveTask = await a.client.from("tasks").update({ owner_id: b.id }).eq("id", task.data!.id);
+    expect(moveTask.error).not.toBeNull(); // ownership cannot be handed to someone else
+  });
+});
+
+describe("usage limits and accounting", () => {
+  it("are readable by the user but only writable by the operator", async () => {
+    const forged = await a.client.from("usage_limits").insert({ user_id: a.id, monthly_budget_usd: 1e6 });
+    expect(forged.error).not.toBeNull();
+    expect((await admin.from("usage_limits").upsert({ user_id: a.id, monthly_budget_usd: 5 })).error).toBeNull();
+    const raise = await a.client.from("usage_limits").update({ monthly_budget_usd: 1e6 }).eq("user_id", a.id).select();
+    expect(raise.error !== null || (raise.data ?? []).length === 0).toBe(true);
+    expect((await a.client.from("usage_limits").select("monthly_budget_usd").eq("user_id", a.id).single()).data?.monthly_budget_usd).toBe(5);
+    expect((await b.client.from("usage_limits").select("*").eq("user_id", a.id)).data).toEqual([]);
+  });
+
+  it("summarizes only the caller's usage", async () => {
+    const agentId = (await storeA.snapshot()).agents[0].id;
+    await storeA.insert("usage", { id: crypto.randomUUID(), at: new Date().toISOString(), agentId, taskId: null, projectId: null, provider: "anthropic", model: "claude-opus-5-5", inputTokens: 1000, outputTokens: 500, costUsd: 0.014 });
+    const month = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString();
+    const mine = await a.client.rpc("usage_summary", { p_month_start: month, p_day_start: month }).single();
+    const theirs = await b.client.rpc("usage_summary", { p_month_start: month, p_day_start: month }).single();
+    expect(Number((mine.data as { month_tokens: number }).month_tokens)).toBeGreaterThanOrEqual(1500);
+    expect(Number((theirs.data as { month_tokens: number }).month_tokens)).toBe(0);
+  });
+
+  it("recovers stale work for the caller only", async () => {
+    const agentId = (await storeA.snapshot()).agents[2].id;
+    const task = await a.client.from("tasks").insert({ owner_id: a.id, agent_id: agentId, title: "t", description: "d", priority: "low", status: "running" }).select().single();
+    await b.client.rpc("recover_stale_work", { p_stale_after: "0 seconds" });
+    expect((await a.client.from("tasks").select("status").eq("id", task.data!.id).single()).data?.status).toBe("running");
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await a.client.rpc("recover_stale_work", { p_stale_after: "0 seconds" });
+    expect((await a.client.from("tasks").select("status").eq("id", task.data!.id).single()).data?.status).toBe("failed");
   });
 });
 

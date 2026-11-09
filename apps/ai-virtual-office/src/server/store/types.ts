@@ -45,6 +45,12 @@ export interface OfficeStore {
     allowed: Collections[C][K][],
     patch: Partial<Collections[C]>,
   ): Promise<Collections[C] | null>;
+  /**
+   * Deletes a project that is not planning or running, with its tasks and conversations.
+   * Returns false when it does not exist, belongs to someone else, or is busy.
+   * Usage and activity history are kept. Files must be removed first (see account.ts).
+   */
+  deleteProject(projectId: string): Promise<boolean>;
 }
 
 /** Bounds keep snapshots small; full history lives in the database. */

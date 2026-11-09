@@ -25,7 +25,7 @@ Without AI keys the app still runs and shows each AI integration as unavailable;
 1. **Escritório** — ask the CEO (for example, “Crie um aplicativo de gestão financeira”). The CEO calls a meeting, plans, distributes tasks, the team works at their desks, and the CEO presents the result.
 2. **Tarefas** — create tasks or projects manually, run or retry them, upload project files, and read results and history.
 3. **Agentes** — edit your six default agents or register new ones.
-4. **Dashboard** — counts, API usage, estimated cost, errors, and integration status.
+4. **Dashboard** — counts, monthly AI consumption against your limits, estimated cost, errors, and integration status.
 5. **Perfil** — name, preferences, and password change by e-mail link.
 
 ## Checks
@@ -44,4 +44,5 @@ Browser end-to-end flow: see [docs/quality.md](docs/quality.md).
 - [docs/architecture.md](docs/architecture.md) — modules, authorization layers, execution flow
 - [docs/supabase.md](docs/supabase.md) — schema, RLS, and Supabase configuration
 - [docs/quality.md](docs/quality.md) — what each check proves
+- [docs/stage3-architecture.md](docs/stage3-architecture.md) — planned code-execution architecture
 - [AGENTS.md](AGENTS.md) — rules for coding agents

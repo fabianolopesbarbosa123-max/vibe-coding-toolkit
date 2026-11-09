@@ -5,6 +5,7 @@ import { ActivityFeed } from "@/components/activity-feed";
 import { IntegrationList } from "@/components/integration-list";
 import { ProjectList } from "@/components/tasks/project-list";
 import { Card } from "@/components/ui";
+import { BudgetPanel } from "@/components/budget/budget-panel";
 
 const usd = (value: number) => value.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4 });
 const int = (value: number) => value.toLocaleString("pt-BR");
@@ -34,6 +35,7 @@ export function Dashboard({ snapshot }: { snapshot: OfficeSnapshot }) {
           </li>
         ))}
       </ul>
+      <BudgetPanel budget={snapshot.budget} />
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Consumo de APIs por agente">
           <div className="overflow-x-auto">

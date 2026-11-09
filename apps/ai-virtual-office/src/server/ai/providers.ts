@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import type { z } from "zod";
 import type { Agent, Integration, Provider } from "@/lib/domain";
-import { getEnv } from "../env";
+import { FALLBACK_MODELS, getAiConfig, MAX_OUTPUT_TOKENS, modelFor, providerStatus } from "./config";
 
 export class IntegrationUnavailableError extends Error {
   constructor(readonly provider: Provider, detail: string) {
@@ -14,29 +14,23 @@ export class IntegrationUnavailableError extends Error {
   }
 }
 
+export interface BilledUsage {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface Generation<T> {
   output: T;
   provider: Provider;
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** One entry per billed attempt (e.g. a refusal fallback), each with its own model. */
+  billed: BilledUsage[];
 }
 
-/** Models that accept the server-side refusal fallback (`fallbacks: "default"`). */
-const FALLBACK_MODELS = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
-const MAX_TOKENS = 16000;
-
-export function providerStatus(provider: Provider): { available: boolean; detail: string } {
-  const env = getEnv();
-  if (provider === "anthropic") {
-    return env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN
-      ? { available: true, detail: `Modelo padrão: ${env.ANTHROPIC_MODEL}` }
-      : { available: false, detail: "Defina ANTHROPIC_API_KEY no .env.local para ativar a Claude API." };
-  }
-  if (!env.OPENAI_API_KEY) return { available: false, detail: "Defina OPENAI_API_KEY no .env.local." };
-  if (!env.OPENAI_MODEL) return { available: false, detail: "Defina OPENAI_MODEL com o modelo autorizado." };
-  return { available: true, detail: `Modelo padrão: ${env.OPENAI_MODEL}` };
-}
+export { providerStatus } from "./config";
 
 export function listIntegrations(storeKind: "file" | "supabase"): Integration[] {
   const claude = providerStatus("anthropic");
@@ -58,8 +52,20 @@ export function listIntegrations(storeKind: "file" | "supabase"): Integration[] 
 function resolveModel(agent: Pick<Agent, "provider" | "model">): string {
   const status = providerStatus(agent.provider);
   if (!status.available) throw new IntegrationUnavailableError(agent.provider, status.detail);
-  const env = getEnv();
-  return agent.model ?? (agent.provider === "anthropic" ? env.ANTHROPIC_MODEL : env.OPENAI_MODEL!);
+  return modelFor(agent);
+}
+
+/** Uses per-attempt usage when the API reports it (fallbacks), else the top-level usage. */
+function anthropicBilling(usage: { input_tokens: number; output_tokens: number; iterations?: unknown }, model: string): BilledUsage[] {
+  const iterations = Array.isArray(usage.iterations) ? (usage.iterations as Record<string, unknown>[]) : [];
+  const billed = iterations
+    .filter(entry => typeof entry.input_tokens === "number" && typeof entry.output_tokens === "number")
+    .map(entry => ({
+      model: typeof entry.model === "string" ? entry.model : model,
+      inputTokens: entry.input_tokens as number,
+      outputTokens: entry.output_tokens as number,
+    }));
+  return billed.length ? billed : [{ model, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens }];
 }
 
 function assertNotRefused(stopReason: string | null) {
@@ -69,8 +75,9 @@ function assertNotRefused(stopReason: string | null) {
 
 let anthropicClient: Anthropic | undefined;
 let openaiClient: OpenAI | undefined;
-const anthropic = () => (anthropicClient ??= new Anthropic());
-const openai = () => (openaiClient ??= new OpenAI({ apiKey: getEnv().OPENAI_API_KEY }));
+const anthropic = () =>
+  (anthropicClient ??= new Anthropic({ apiKey: getAiConfig().ANTHROPIC_API_KEY ?? null, authToken: getAiConfig().ANTHROPIC_AUTH_TOKEN ?? null }));
+const openai = () => (openaiClient ??= new OpenAI({ apiKey: getAiConfig().OPENAI_API_KEY }));
 
 function anthropicExtras(model: string) {
   return FALLBACK_MODELS.has(model)
@@ -87,7 +94,7 @@ export async function generateText(
   if (agent.provider === "anthropic") {
     const response = await anthropic().beta.messages.create({
       model,
-      max_tokens: MAX_TOKENS,
+      max_tokens: MAX_OUTPUT_TOKENS,
       system,
       messages: [{ role: "user", content: prompt }],
       ...anthropicExtras(model),
@@ -100,15 +107,17 @@ export async function generateText(
       model: response.model,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      billed: anthropicBilling(response.usage, response.model),
     };
   }
-  const response = await openai().responses.create({ model, instructions: system, input: prompt });
+  const response = await openai().responses.create({ model, instructions: system, input: prompt, max_output_tokens: MAX_OUTPUT_TOKENS });
   return {
     output: response.output_text.trim(),
     provider: "openai",
     model,
     inputTokens: response.usage?.input_tokens ?? 0,
     outputTokens: response.usage?.output_tokens ?? 0,
+    billed: [{ model, inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 }],
   };
 }
 
@@ -122,7 +131,7 @@ export async function generateObject<T extends z.ZodType>(
   if (agent.provider === "anthropic") {
     const response = await anthropic().beta.messages.parse({
       model,
-      max_tokens: MAX_TOKENS,
+      max_tokens: MAX_OUTPUT_TOKENS,
       system,
       messages: [{ role: "user", content: prompt }],
       output_config: { format: betaZodOutputFormat(schema) },
@@ -136,6 +145,7 @@ export async function generateObject<T extends z.ZodType>(
       model: response.model,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      billed: anthropicBilling(response.usage, response.model),
     };
   }
   const response = await openai().responses.parse({
@@ -143,6 +153,7 @@ export async function generateObject<T extends z.ZodType>(
     instructions: system,
     input: prompt,
     text: { format: zodTextFormat(schema, "plan") },
+    max_output_tokens: MAX_OUTPUT_TOKENS,
   });
   if (!response.output_parsed) throw new Error("O modelo não retornou um plano válido.");
   return {
@@ -151,12 +162,14 @@ export async function generateObject<T extends z.ZodType>(
     model,
     inputTokens: response.usage?.input_tokens ?? 0,
     outputTokens: response.usage?.output_tokens ?? 0,
+    billed: [{ model, inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 }],
   };
 }
 
 /** Public, bounded error text. Never includes request bodies or credentials. */
 export function describeError(error: unknown): string {
   if (error instanceof IntegrationUnavailableError) return error.message;
+  if (error instanceof Error && error.name === "BudgetExceededError") return error.message;
   if (error instanceof Anthropic.APIConnectionError || error instanceof OpenAI.APIConnectionError) {
     return "Falha de conexão com o provedor de IA.";
   }

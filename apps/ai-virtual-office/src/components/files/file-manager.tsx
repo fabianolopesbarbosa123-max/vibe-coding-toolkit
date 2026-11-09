@@ -13,8 +13,9 @@ const formatSize = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 104
 const safeName = (name: string) => name.normalize("NFKD").replace(/[^\w.-]+/g, "_").slice(-120) || "arquivo";
 
 /**
- * Uploads go straight from the browser to the private bucket under "<user id>/...",
- * which Storage RLS enforces; the server then validates and records the metadata.
+ * The server validates and records the metadata first; only then may the browser upload
+ * the bytes to "<user id>/<file id>/..." (Storage policy requires that row). If the upload
+ * fails, the row is removed, so no object ever exists without metadata.
  */
 export function FileManager({ snapshot }: { snapshot: OfficeSnapshot }) {
   const { post, notify, refresh } = useOffice();
@@ -49,14 +50,14 @@ export function FileManager({ snapshot }: { snapshot: OfficeSnapshot }) {
     const id = crypto.randomUUID();
     const storagePath = `${snapshot.profile.id}/${id}/${safeName(file.name)}`;
     try {
+      await post("/api/files", { id, name: file.name.slice(0, 200), storagePath, mimeType: file.type, sizeBytes: file.size, projectId: projectId || null });
       const { error: uploadError } = await supabase.storage.from(BUCKET).upload(storagePath, file, { contentType: file.type, upsert: false });
-      if (uploadError) throw new Error("Falha no envio do arquivo.");
-      try {
-        await post("/api/files", { id, name: file.name.slice(0, 200), storagePath, mimeType: file.type, sizeBytes: file.size, projectId: projectId || null });
-      } catch (err) {
-        await supabase.storage.from(BUCKET).remove([storagePath]);
-        throw err;
+      if (uploadError) {
+        await fetch(`/api/files/${id}`, { method: "DELETE" }).catch(() => undefined);
+        await refresh();
+        throw new Error("Falha no envio do arquivo. Nada foi salvo; tente novamente.");
       }
+      await refresh();
       notify("Arquivo enviado.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha no envio do arquivo.");
@@ -101,7 +102,7 @@ export function FileManager({ snapshot }: { snapshot: OfficeSnapshot }) {
                 {file.projectId && ` · ${snapshot.projects.find(project => project.id === file.projectId)?.name ?? ""}`}
               </span>
             </div>
-            <button type="button" onClick={() => remove(file.id, file.name)} className="shrink-0 rounded px-2 py-1 text-xs text-rose-300 hover:bg-rose-500/10">Excluir</button>
+            <button type="button" onClick={() => remove(file.id, file.name)} aria-label={`Excluir arquivo ${file.name}`} className="shrink-0 rounded px-2 py-1 text-xs text-rose-300 hover:bg-rose-500/10">Excluir</button>
           </li>
         ))}
         {!snapshot.files.length && <li className="text-sm text-slate-500">Nenhum arquivo enviado.</li>}

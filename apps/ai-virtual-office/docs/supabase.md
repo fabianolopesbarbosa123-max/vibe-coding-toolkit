@@ -41,13 +41,41 @@ Confirmation and recovery e-mails are captured by Mailpit at http://127.0.0.1:54
 | `tasks` | Ordered work items | full CRUD on own rows |
 | `agent_conversations` / `agent_messages` | Exact prompt/response of each planning, task, and summary call | full CRUD on own rows |
 | `activity_events` | Activity history | read/insert own (append-only) |
-| `usage_records` | Tokens and estimated cost per call | read/insert own (append-only) |
-| `files` | Metadata of uploads in the private `office-files` bucket | full CRUD on own rows |
+| `usage_records` | Tokens and estimated cost per call, with `project_id` kept after project deletion | read/insert own (append-only) |
+| `usage_limits` | Operator-defined limits per user (budget, tokens, daily calls, concurrency) | read own; **no user writes** |
+| `files` | Metadata of uploads in the private `office-files` bucket | read/insert own; update only `name`/`project_id`; delete only after the object is gone |
 
-Every table has `owner_id uuid` referencing `auth.users` with `on delete cascade`. Composite foreign keys
+Functions (security invoker, so RLS applies): `usage_summary(month_start, day_start)` returns the caller's totals;
+`recover_stale_work(interval)` marks the caller's abandoned work as failed.
+
+Every table has `owner_id uuid` (or `user_id`) referencing `auth.users` with `on delete cascade`. Composite foreign keys
 `(id, owner_id)` make a task, conversation, or file unable to reference another user's agent or project, even if
 an id leaks. `anon` has no table privileges. Storage policies allow access only under `<auth.uid()>/` in the
 `office-files` bucket; `files.storage_path` must start with the owner's id.
+
+### Storage and metadata consistency
+
+- An object can only be uploaded after its `files` row exists (Storage insert policy), so no object exists without metadata.
+- A `files` row can only be deleted once its object is gone, so no object is left without metadata.
+- `files.project_id` references the project with `on delete restrict`: a project with files cannot be deleted
+  directly, even through the REST API. The app removes objects, then rows, then the project.
+- The bucket allows only the app's MIME types and 10 MB per file, also for direct API uploads.
+
+## Per-user AI limits
+
+Defaults come from `OFFICE_DEFAULT_*` environment variables. To change one user's limits, run in the SQL editor
+(or with the secret key from a trusted script, never from the app):
+
+```sql
+insert into public.usage_limits (user_id, monthly_budget_usd, monthly_token_limit, daily_request_limit, max_concurrent_runs, note)
+values ('<user uuid>', 25, 5000000, 300, 3, 'pilot customer')
+on conflict (user_id) do update set monthly_budget_usd = excluded.monthly_budget_usd,
+  monthly_token_limit = excluded.monthly_token_limit, daily_request_limit = excluded.daily_request_limit,
+  max_concurrent_runs = excluded.max_concurrent_runs, note = excluded.note;
+```
+
+A null column falls back to the default. Users can only lower their budget (`personal_monthly_budget_usd`) and
+choose the alert threshold (`budget_alert_percent`) on the profile page.
 
 Realtime publishes `agents`, `projects`, `tasks`, `activity_events`, `usage_records`, and `files`; Realtime checks
 RLS before delivering each change, so subscribers receive only their own rows.

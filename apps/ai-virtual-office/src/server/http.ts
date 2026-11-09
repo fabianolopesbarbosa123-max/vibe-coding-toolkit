@@ -44,6 +44,9 @@ export async function readJson<T extends z.ZodType>(request: Request, schema: T)
 
 export function errorResponse(error: unknown) {
   if (error instanceof HttpError) return NextResponse.json({ error: error.message }, { status: error.status });
+  if (error instanceof Error && error.name === "BudgetExceededError") {
+    return NextResponse.json({ error: error.message, code: "budget_exceeded" }, { status: 429 });
+  }
   if (error instanceof IntegrationUnavailableError) {
     return NextResponse.json({ error: `Integração indisponível: ${error.message}` }, { status: 503 });
   }

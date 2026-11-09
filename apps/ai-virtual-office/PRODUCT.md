@@ -26,12 +26,14 @@ Individual users (solo founders, developers, small team leads), each with a priv
 - Row Level Security on every table, composite foreign keys against cross-user references, no service-role key in the app.
 - Supabase Realtime replaces periodic polling; polling remains only as a fallback, with connection and offline banners.
 - Toasts for success, clear error messages, loading and empty states.
+- Per-user AI usage control: central server-side key configuration, model allowlist, token and cost recording per call/task/project, configurable limits, budget alerts, and refusal before overspending.
+- Project deletion with confirmation that removes tasks, conversations, and Storage files without leaving orphans.
 
 ## Constraints
 
 - Agents cannot browse the web, read files, or run code yet; prompts tell them so.
 - Multi-user use requires Supabase. `OFFICE_LOCAL_MODE` is a single-user development mode without login; keep it on 127.0.0.1.
-- AI keys belong to the operator and are shared by all users; per-user budgets arrive in stage 5.
+- AI keys belong to the operator and stay on the server. Each user has limits (monthly budget, tokens, daily calls, concurrency) set by the operator, can only tighten their own budget, and gets alerts; calls that could exceed a limit are refused before they are sent. Costs are estimates from the published price table.
 - Background runs use `after()` with the user's JWT: bounded by the route's `maxDuration` and the JWT lifetime (default one hour).
 
 ## Roadmap

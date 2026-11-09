@@ -1,4 +1,5 @@
 import type { AuthMode, Integration, OfficeFile, OfficeState, Profile, UserSettings } from "./domain";
+import type { BudgetStatus } from "./budget";
 import type { OfficeStats } from "./stats";
 
 export interface OfficeSnapshot extends OfficeState {
@@ -9,4 +10,5 @@ export interface OfficeSnapshot extends OfficeState {
   profile: Profile;
   settings: UserSettings;
   files: OfficeFile[];
+  budget: BudgetStatus;
 }

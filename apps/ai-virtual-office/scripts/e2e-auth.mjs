@@ -1,6 +1,9 @@
 /**
  * Stage 2 end-to-end check against a running app and the local Supabase stack.
- * Usage: APP_URL=http://127.0.0.1:3000 MAILPIT_URL=http://127.0.0.1:54324 node scripts/e2e-auth.mjs
+ * Usage: scripts/with-local-supabase.sh node scripts/e2e-auth.mjs
+ *   (APP_URL and MAILPIT_URL default to the local stack.) With SUPABASE_TEST_SECRET_KEY set, the
+ *   script also verifies Storage cleanup and budgets; budget steps need the app started with the
+ *   fake Claude API fixture (E2E_AI_FIXTURE=1, see scripts/fixtures/fake-claude-api.mjs).
  * Requires Playwright with Chromium (local dependency, or global with NODE_PATH="$(npm root -g)"). Creates throwaway users on the local stack only.
  */
 import assert from "node:assert/strict";
@@ -14,6 +17,21 @@ const mailpit = process.env.MAILPIT_URL ?? "http://127.0.0.1:54324";
 const shots = process.env.SHOTS_DIR;
 const run = Date.now();
 const results = [];
+const secretKey = process.env.SUPABASE_TEST_SECRET_KEY;
+const supabaseUrl = process.env.SUPABASE_TEST_URL;
+const aiFixture = process.env.E2E_AI_FIXTURE === "1";
+/** Operator actions (setting limits, inspecting Storage) use the local stack's secret key. */
+async function operator(path, init = {}) {
+  const response = await fetch(`${supabaseUrl}${path}`, {
+    ...init,
+    headers: { apikey: secretKey, authorization: `Bearer ${secretKey}`, "content-type": "application/json", ...(init.headers ?? {}) },
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : null };
+}
+const setLimits = (userId, limits) =>
+  operator("/rest/v1/usage_limits?on_conflict=user_id", { method: "POST", headers: { prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ user_id: userId, ...limits }) });
+const state = async target => (await target.request.get(`${app}/api/state`)).json();
 
 async function step(name, fn) {
   try {
@@ -145,10 +163,114 @@ await step("files: private upload, download, and delete", async () => {
   const download = await page.request.get(`${app}${await link.getAttribute("href")}`);
   assert.equal(await download.text(), "conteúdo do briefing");
   page.once("dialog", dialog => dialog.accept());
-  await page.getByRole("button", { name: "Excluir" }).click();
+  await page.getByRole("button", { name: "Excluir arquivo briefing.txt" }).click();
   await page.getByRole("status").filter({ hasText: "Arquivo excluído." }).waitFor();
   await page.getByText("Nenhum arquivo enviado.").waitFor();
 });
+
+await step("project deletion removes tasks, conversations, and Storage files", async () => {
+  const name = `Projeto para excluir ${run}`;
+  await page.goto(`${app}/tasks`);
+  await page.getByRole("textbox", { name: "Nome" }).nth(1).fill(name);
+  await page.getByLabel("Objetivo").fill("Será excluído");
+  await page.getByRole("button", { name: "Criar projeto" }).click();
+  await page.getByRole("status").filter({ hasText: "Projeto criado." }).waitFor();
+  let snapshot = await state(page);
+  const project = snapshot.projects.find(item => item.name === name);
+  await page.getByRole("textbox", { name: "Nome" }).first().fill("Tarefa do projeto excluído");
+  await page.getByLabel("Descrição").fill("x");
+  await page.getByLabel("Agente responsável").selectOption({ label: "Rafael — Programador" });
+  await page.getByLabel("Projeto (opcional)").selectOption({ label: name });
+  await page.getByRole("button", { name: "Criar tarefa" }).click();
+  await page.getByRole("status").filter({ hasText: "Tarefa criada." }).waitFor();
+  await page.getByLabel("Projeto do arquivo").selectOption({ label: name });
+  await page.getByLabel("Selecionar arquivo").setInputFiles({ name: "anexo.txt", mimeType: "text/plain", buffer: Buffer.from("anexo") });
+  await page.getByRole("status").filter({ hasText: "Arquivo enviado." }).waitFor();
+  snapshot = await state(page);
+  const file = snapshot.files.find(item => item.projectId === project.id);
+  assert.ok(file, "file linked to project");
+  if (secretKey) {
+    const before = await operator(`/storage/v1/object/list/office-files`, { method: "POST", body: JSON.stringify({ prefix: `${snapshot.profile.id}/${file.id}` }) });
+    assert.equal(before.body.length, 1, "object present before deletion");
+  }
+  page.once("dialog", dialog => {
+    assert.match(dialog.message(), /1 arquivo/);
+    dialog.accept();
+  });
+  await page.getByRole("button", { name: `Excluir projeto ${name}` }).first().click();
+  await page.getByRole("status").filter({ hasText: "excluído" }).first().waitFor();
+  snapshot = await state(page);
+  assert.equal(snapshot.projects.some(item => item.id === project.id), false);
+  assert.equal(snapshot.tasks.some(item => item.projectId === project.id), false);
+  assert.equal(snapshot.files.some(item => item.id === file.id), false);
+  if (secretKey) {
+    const after = await operator(`/storage/v1/object/list/office-files`, { method: "POST", body: JSON.stringify({ prefix: `${snapshot.profile.id}/${file.id}` }) });
+    assert.deepEqual(after.body, [], "no orphan object in Storage");
+    const conversations = await operator(`/rest/v1/agent_conversations?project_id=eq.${project.id}&select=id`);
+    assert.deepEqual(conversations.body, []);
+  }
+});
+
+if (secretKey) {
+  await step("deleting another user's project or file through the API is refused", async () => {
+    const snapshot = await state(page);
+    const target = snapshot.projects[0];
+    const context = await browser.newContext();
+    const intruder = await context.newPage();
+    await operator("/auth/v1/admin/users", { method: "POST", body: JSON.stringify({ email: `intruso-${run}@example.test`, password: "Intruso-Pass1", email_confirm: true }) });
+    await login(intruder, `intruso-${run}@example.test`, "Intruso-Pass1");
+    await intruder.waitForURL(`${app}/`);
+    const response = await intruder.request.delete(`${app}/api/projects/${target.id}`, { headers: { origin: app } });
+    assert.equal(response.status(), 404);
+    assert.ok((await state(page)).projects.some(item => item.id === target.id), "project survives");
+    await context.close();
+  });
+}
+
+if (secretKey && aiFixture) {
+  await step("usage control: per-project cost, budget alert, and refusal before spending", async () => {
+    const me = (await state(page)).profile.id;
+    assert.equal((await setLimits(me, { monthly_budget_usd: 0.5 })).status < 300, true);
+    await page.goto(`${app}/profile`);
+    await page.getByLabel("Alertar ao atingir (% do limite mensal)").fill("10");
+    await page.getByRole("button", { name: "Salvar alterações" }).click();
+    await page.getByRole("status").filter({ hasText: "Perfil atualizado." }).waitFor();
+    await page.goto(`${app}/`);
+    await page.getByLabel("Solicitação para o CEO").fill("Planeje um app de finanças");
+    await page.getByRole("button", { name: "Enviar ao CEO" }).click();
+    let snapshot;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      snapshot = await state(page);
+      const latest = snapshot.projects.at(-1);
+      if (latest && (latest.status === "completed" || latest.status === "failed")) break;
+      await page.waitForTimeout(1000);
+    }
+    const project = snapshot.projects.at(-1);
+    assert.equal(project.status, "completed", project.summary ?? "");
+    assert.ok(snapshot.stats.costByProject[project.id] > 0, "cost recorded for the project");
+    assert.ok(snapshot.budget.usage.monthCostUsd > 0.05);
+    assert.ok(snapshot.events.some(event => /Alerta de orçamento: 10%/.test(event.message)), "budget alert event");
+    // Banner (the same alert also appears in the activity feed).
+    await page.getByRole("status").filter({ hasText: /Alerta de orçamento: \d+% do limite mensal de IA usado/ }).waitFor();
+
+    assert.equal((await setLimits(me, { monthly_budget_usd: 0.1 })).status < 300, true);
+    const projectsBefore = snapshot.projects.length;
+    await page.getByLabel("Solicitação para o CEO").fill("Outro pedido caro");
+    await page.getByRole("button", { name: "Enviar ao CEO" }).click();
+    await page.getByText(/Orçamento insuficiente/).waitFor();
+    assert.equal((await state(page)).projects.length, projectsBefore, "nothing created when refused");
+
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await operator("/auth/v1/admin/users", { method: "POST", body: JSON.stringify({ email: `consumo-${run}@example.test`, password: "Consumo-Pass1", email_confirm: true }) });
+    await login(otherPage, `consumo-${run}@example.test`, "Consumo-Pass1");
+    await otherPage.waitForURL(`${app}/`);
+    const theirs = await state(otherPage);
+    assert.equal(theirs.budget.usage.monthCostUsd, 0, "usage is per user");
+    await other.close();
+    await operator(`/rest/v1/usage_limits?user_id=eq.${me}`, { method: "DELETE" });
+  });
+}
 
 await step("logout ends the session and protects the office again", async () => {
   await page.getByRole("button", { name: "Sair" }).click();

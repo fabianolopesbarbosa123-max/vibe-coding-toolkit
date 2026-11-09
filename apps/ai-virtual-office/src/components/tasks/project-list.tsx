@@ -3,10 +3,17 @@
 import type { Agent, Project, Task } from "@/lib/domain";
 import { Badge } from "@/components/ui";
 import { RunButton } from "@/components/run-button";
+import { useOffice } from "@/components/office-provider";
+import { DeleteProjectButton } from "./delete-project-button";
 import { formatDate, PROJECT_STATUS_LABELS } from "@/lib/labels";
 import { PROJECT_STATUS_TONE } from "@/lib/tones";
 
+const usd = (value: number) => value.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 4 });
+
 export function ProjectList({ projects, tasks, limit }: { projects: Project[]; tasks: Task[]; agents?: Agent[]; limit?: number }) {
+  const { snapshot } = useOffice();
+  const costs = snapshot?.stats.costByProject ?? {};
+  const files = snapshot?.files ?? [];
   const items = [...projects].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
   if (!items.length) return <p className="text-sm text-slate-500">Nenhum projeto. Faça um pedido ao CEO ou crie um projeto.</p>;
   return (
@@ -21,11 +28,15 @@ export function ProjectList({ projects, tasks, limit }: { projects: Project[]; t
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="font-medium text-slate-100">{project.name}</p>
-                <p className="text-xs text-slate-500">{formatDate(project.createdAt)} · {done}/{own.length} tarefas</p>
+                <p className="text-xs text-slate-500">
+                  {formatDate(project.createdAt)} · {done}/{own.length} tarefas
+                  {costs[project.id] ? ` · custo estimado ${usd(costs[project.id])}` : ""}
+                </p>
               </div>
               <div className="flex shrink-0 items-start gap-2">
                 <Badge tone={PROJECT_STATUS_TONE[project.status]}>{PROJECT_STATUS_LABELS[project.status]}</Badge>
                 {runnable && <RunButton url={`/api/projects/${project.id}/run`} label={project.status === "failed" ? "Retomar" : "Executar"} />}
+                <DeleteProjectButton project={project} taskCount={own.length} fileCount={files.filter(file => file.projectId === project.id).length} />
               </div>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label={`Progresso de ${project.name}`}>

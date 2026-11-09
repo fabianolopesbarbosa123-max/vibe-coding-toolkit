@@ -1,61 +1,26 @@
 import "server-only";
 import { z } from "zod";
-import { PRIORITIES, type Agent, type EventLevel, type Project, type Task, type TaskInput } from "@/lib/domain";
-import { estimateCostUsd } from "@/lib/pricing";
+import { PRIORITIES, type Agent, type OfficeState, type Project, type Task, type TaskInput } from "@/lib/domain";
 import { agentSystemPrompt, planPrompt, summaryPrompt, taskPrompt } from "./ai/prompts";
-import { describeError, generateObject, generateText, providerStatus, IntegrationUnavailableError, type Generation } from "./ai/providers";
-import { getEnv } from "./env";
+import { describeError, providerStatus, IntegrationUnavailableError } from "./ai/providers";
 import { HttpError } from "./http";
+import { logEvent, runObject, runText } from "./ledger";
 import type { OfficeContext } from "./store";
+import { assertAdmission, assertCallAllowed } from "./usage";
 
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
-type Refs = { agentId?: string; taskId?: string; projectId?: string };
 
-async function logEvent(ctx: OfficeContext, level: EventLevel, message: string, refs: Refs = {}) {
-  await ctx.store.insert("events", {
-    id: newId(),
-    at: now(),
-    level,
-    message: message.slice(0, 1000),
-    agentId: refs.agentId ?? null,
-    taskId: refs.taskId ?? null,
-    projectId: refs.projectId ?? null,
-  });
-}
-
-async function recordUsage(ctx: OfficeContext, agentId: string, taskId: string | null, generation: Generation<unknown>) {
-  const env = getEnv();
-  const openaiPrice =
-    env.OPENAI_INPUT_PRICE_PER_MTOK !== undefined && env.OPENAI_OUTPUT_PRICE_PER_MTOK !== undefined
-      ? { input: env.OPENAI_INPUT_PRICE_PER_MTOK, output: env.OPENAI_OUTPUT_PRICE_PER_MTOK }
-      : null;
-  await ctx.store.insert("usage", {
-    id: newId(),
-    at: now(),
-    agentId,
-    taskId,
-    provider: generation.provider,
-    model: generation.model,
-    inputTokens: generation.inputTokens,
-    outputTokens: generation.outputTokens,
-    costUsd: estimateCostUsd(generation.provider, generation.model, generation.inputTokens, generation.outputTokens, openaiPrice),
-  });
-}
-
-/** Keeps the exact exchange with the model so results can be audited later. */
-async function recordConversation(
-  ctx: OfficeContext,
-  kind: "planning" | "task" | "summary",
-  refs: { agentId: string; projectId: string | null; taskId: string | null },
-  messages: { system: string; prompt: string; output: string },
-) {
-  const conversationId = newId();
-  const createdAt = now();
-  await ctx.store.insert("conversations", { id: conversationId, kind, createdAt, ...refs });
-  for (const [role, content] of [["system", messages.system], ["user", messages.prompt], ["assistant", messages.output]] as const) {
-    await ctx.store.insert("messages", { id: newId(), conversationId, role, content, createdAt });
-  }
+/**
+ * Background runs act with the requesting user's JWT. Stop cleanly before it expires,
+ * while writes still succeed, so nothing is left stuck in "running".
+ */
+const SESSION_MARGIN_MS = 10 * 60 * 1000;
+async function stopIfSessionEnding(ctx: OfficeContext, projectId: string): Promise<boolean> {
+  if (ctx.sessionExpiresAt === null || ctx.sessionExpiresAt - Date.now() > SESSION_MARGIN_MS) return false;
+  await ctx.store.update("projects", projectId, { status: "failed" });
+  await logEvent(ctx, "warning", "Execução pausada: a sessão está perto de expirar. Use “Retomar” para continuar.", { projectId });
+  return true;
 }
 
 async function findCeo(ctx: OfficeContext, agents?: Agent[]): Promise<Agent> {
@@ -93,6 +58,16 @@ export async function createTask(ctx: OfficeContext, input: TaskInput, order?: n
   return task;
 }
 
+/** The exact prompt a task will send: its description plus results shared by earlier tasks. */
+function taskRequest(state: OfficeState, task: Task, agent: Agent) {
+  const project = state.projects.find(item => item.id === task.projectId) ?? null;
+  const previous = state.tasks
+    .filter(item => item.projectId && item.projectId === task.projectId && item.status === "completed" && item.order < task.order)
+    .sort((a, b) => a.order - b.order)
+    .map(item => ({ task: item, agent: state.agents.find(member => member.id === item.agentId) }));
+  return { system: agentSystemPrompt(agent), prompt: taskPrompt(task, project, previous) };
+}
+
 /** Validates and marks a task as running so callers can return before the AI call finishes. */
 export async function claimTask(ctx: OfficeContext, taskId: string): Promise<Task> {
   const { store } = ctx;
@@ -102,7 +77,10 @@ export async function claimTask(ctx: OfficeContext, taskId: string): Promise<Tas
   if (task.status === "running" || task.status === "completed") throw new HttpError(409, "Tarefa já executada ou em execução.");
   const agent = state.agents.find(item => item.id === task.agentId);
   if (!agent) throw new HttpError(409, "O agente responsável não existe mais.");
-    assertProviderAvailable(agent);
+  assertProviderAvailable(agent);
+  await assertAdmission(ctx);
+  const request = taskRequest(state, task, agent);
+  await assertCallAllowed(ctx, agent, request.system, request.prompt);
   const busy = await store.claim("agents", agent.id, "status", ["idle", "done", "error"], { status: "working", currentTaskId: taskId });
   if (!busy) throw new HttpError(409, `${agent.name} está ocupado(a) com outra tarefa.`);
   const claimed = await store.claim("tasks", taskId, "status", ["pending", "failed"], { status: "running", startedAt: now(), error: null });
@@ -121,17 +99,9 @@ export async function executeTask(ctx: OfficeContext, taskId: string): Promise<T
   const task = state.tasks.find(item => item.id === taskId);
   const agent = task && state.agents.find(item => item.id === task.agentId);
   if (!task || !agent) return null;
-  const project = state.projects.find(item => item.id === task.projectId) ?? null;
-  const previous = state.tasks
-    .filter(item => item.projectId && item.projectId === task.projectId && item.status === "completed" && item.order < task.order)
-    .sort((a, b) => a.order - b.order)
-    .map(item => ({ task: item, agent: state.agents.find(member => member.id === item.agentId) }));
   try {
-    const system = agentSystemPrompt(agent);
-    const prompt = taskPrompt(task, project, previous);
-    const generation = await generateText(agent, system, prompt);
-    await recordUsage(ctx, agent.id, task.id, generation);
-    await recordConversation(ctx, "task", { agentId: agent.id, projectId: task.projectId, taskId: task.id }, { system, prompt, output: generation.output });
+    const { system, prompt } = taskRequest(state, task, agent);
+    const generation = await runText(ctx, "task", agent, { agentId: agent.id, projectId: task.projectId, taskId: task.id }, system, prompt);
     const updated = await store.update("tasks", task.id, { status: "completed", result: generation.output, completedAt: now() });
     await store.update("agents", agent.id, { status: "done", currentTaskId: null });
     await logEvent(ctx, "success", `${agent.name} concluiu: ${task.title}`, { agentId: agent.id, taskId: task.id, projectId: task.projectId ?? undefined });
@@ -154,8 +124,12 @@ export async function createProject(ctx: OfficeContext, name: string, request: s
 
 /** Validates the CEO integration before creating anything, so nothing is simulated. */
 export async function startOrchestration(ctx: OfficeContext, request: string): Promise<{ project: Project; ceo: Agent }> {
-  const ceo = await findCeo(ctx);
+  const state = await ctx.store.snapshot();
+  const ceo = await findCeo(ctx, state.agents);
   assertProviderAvailable(ceo);
+  await assertAdmission(ctx);
+  // Same prompt the planner will send, so an over-budget request is refused before anything is created.
+  await assertCallAllowed(ctx, ceo, agentSystemPrompt(ceo), planPrompt(request, state.agents.filter(agent => agent.role !== "ceo")));
   const name = request.length > 60 ? `${request.slice(0, 57)}...` : request;
   const project = await createProject(ctx, name, request, "planning");
   return { project, ceo };
@@ -192,9 +166,7 @@ export async function planProject(ctx: OfficeContext, projectId: string, ceo: Ag
   try {
     const system = agentSystemPrompt(ceo);
     const prompt = planPrompt(project.request, team);
-    const generation = await generateObject(ceo, system, prompt, planSchema);
-    await recordUsage(ctx, ceo.id, null, generation);
-    await recordConversation(ctx, "planning", { agentId: ceo.id, projectId, taskId: null }, { system, prompt, output: JSON.stringify(generation.output, null, 2) });
+    const generation = await runObject(ctx, ceo, { agentId: ceo.id, projectId, taskId: null }, system, prompt, planSchema);
     const plan = generation.output;
     for (const [index, item] of plan.tasks.entries()) {
       await createTask(
@@ -235,6 +207,7 @@ export async function claimProject(ctx: OfficeContext, projectId: string): Promi
     const agent = state.agents.find(item => item.id === task.agentId);
     if (agent) assertProviderAvailable(agent);
   }
+  await assertAdmission(ctx);
   const claimed = await store.claim("projects", projectId, "status", ["ready", "failed"], { status: "running" });
   if (!claimed) throw new HttpError(409, "Projeto ocupado.");
   activeProjects.add(projectKey(ctx, projectId));
@@ -251,6 +224,7 @@ export async function executeProject(ctx: OfficeContext, projectId: string) {
       .filter(task => task.projectId === projectId && task.status !== "completed")
       .sort((a, b) => a.order - b.order);
     for (const task of tasks) {
+      if (await stopIfSessionEnding(ctx, projectId)) return;
       let result: Task | null;
       try {
         await claimTask(ctx, task.id);
@@ -265,6 +239,7 @@ export async function executeProject(ctx: OfficeContext, projectId: string) {
         return;
       }
     }
+    if (await stopIfSessionEnding(ctx, projectId)) return;
     await summarizeProject(ctx, projectId);
   } finally {
     activeProjects.delete(projectKey(ctx, projectId));
@@ -289,9 +264,7 @@ async function summarizeProject(ctx: OfficeContext, projectId: string) {
   try {
     const system = agentSystemPrompt(ceo);
     const prompt = summaryPrompt(project, results);
-    const generation = await generateText(ceo, system, prompt);
-    await recordUsage(ctx, ceo.id, null, generation);
-    await recordConversation(ctx, "summary", { agentId: ceo.id, projectId, taskId: null }, { system, prompt, output: generation.output });
+    const generation = await runText(ctx, "summary", ceo, { agentId: ceo.id, projectId, taskId: null }, system, prompt);
     await store.update("projects", projectId, { status: "completed", result: generation.output });
     await store.update("agents", ceo.id, { status: "done" });
     await logEvent(ctx, "success", `${ceo.name} apresentou o resultado de "${project.name}"`, { agentId: ceo.id, projectId });

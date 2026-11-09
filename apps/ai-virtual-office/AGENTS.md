@@ -27,6 +27,8 @@ Next.js 16 (App Router, Cache Components, `proxy.ts`), React 19, strict TypeScri
 - Every mutating route uses `readJson` (same-origin + JSON + Zod) because it can trigger paid API calls.
 - Route handlers start with `getOfficeContext()` (verifies the session) and pass that context down; persistence goes through `ctx.store`. Keep the file and Supabase stores behaviorally identical.
 - Every new table has `owner_id`, RLS policies scoped to `auth.uid()`, and composite foreign keys for references. Add a new migration file; never edit an applied one. Cover policies in `src/test/integration/`.
+- Every AI call goes through `runText`/`runObject` in `src/server/ledger.ts` (budget check, usage, cost, conversation). Never call the provider SDKs elsewhere. Keys and prices live only in `src/server/ai/config.ts` and `src/lib/pricing.ts`; never invent prices.
+- Deleting data that has Storage objects removes objects first, then rows (the database enforces this order).
 - Public errors use `describeError`; do not echo provider bodies, keys, or request payloads.
 - UI text is pt-BR; code, comments, and docs are English. Keep files under 350 lines.
 - Keep motion compatible with `prefers-reduced-motion`, and keep controls keyboard-accessible.

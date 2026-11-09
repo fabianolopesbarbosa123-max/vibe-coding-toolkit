@@ -3,6 +3,7 @@
 import type { Agent, Project, Task, TaskStatus } from "@/lib/domain";
 import { Badge } from "@/components/ui";
 import { RunButton } from "@/components/run-button";
+import { useOffice } from "@/components/office-provider";
 import { formatDate, PRIORITY_LABELS, TASK_STATUS_LABELS } from "@/lib/labels";
 import { TASK_STATUS_TONE } from "@/lib/tones";
 
@@ -40,6 +41,7 @@ export function TaskBoard({ tasks, agents, projects }: { tasks: Task[]; agents: 
 }
 
 function TaskCard({ task, agent, project }: { task: Task; agent?: Agent; project?: Project }) {
+  const cost = useOffice().snapshot?.stats.costByTask[task.id];
   const inProject = project && (project.status === "running" || project.status === "planning");
   return (
     <li className="rounded-xl border border-white/10 bg-slate-950/60 p-3">
@@ -56,6 +58,7 @@ function TaskCard({ task, agent, project }: { task: Task; agent?: Agent; project
         <span>· {PRIORITY_LABELS[task.priority]}</span>
         <span>· {formatDate(task.createdAt)}</span>
         {project && <span className="truncate">· {project.name}</span>}
+        {cost !== undefined && <span>· US$ {cost.toFixed(4)}</span>}
       </div>
       {task.error && <p className="mt-2 text-xs text-rose-300">{task.error}</p>}
       {task.result && (

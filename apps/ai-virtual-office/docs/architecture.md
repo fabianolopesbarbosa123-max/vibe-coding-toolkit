@@ -35,8 +35,11 @@ Files: upload bytes to Storage (RLS path) ─────►   ├─ orchestrat
 | `src/lib/supabase/` | Public config and the browser client |
 | `src/server/supabase.ts` | Request client (cookies), token client (user JWT), `requireUser()` (verified claims) |
 | `src/server/store/` | `OfficeContext`, `OfficeStore` interface, Supabase and file implementations |
-| `src/server/account.ts` | Profile, settings, and file metadata/storage operations |
-| `src/server/orchestrator.ts` | Task/project lifecycle, CEO planning, execution, summaries, usage, events, conversations |
+| `src/server/account.ts` | Profile, settings, files, and project deletion (Storage → file rows → project) |
+| `src/server/orchestrator.ts` | Task/project lifecycle, CEO planning, execution, summaries |
+| `src/server/ai/config.ts` | Central AI configuration: server-only keys, allowed models, prices, default limits |
+| `src/server/ledger.ts` | The only path to an AI call: budget check, call, usage + cost, alerts, conversation record |
+| `src/server/usage.ts`, `src/lib/budget.ts` | Effective limits (default → operator → personal), usage totals, admission and per-call checks |
 | `src/server/http.ts` | Same-origin/JSON guard, validation, error responses |
 | `src/components/office-provider.tsx` | Snapshot, Realtime subscription, fallback polling, toasts, connection state |
 
@@ -47,6 +50,31 @@ Files: upload bytes to Storage (RLS path) ─────►   ├─ orchestrat
 3. Data access uses a client carrying the user's access token, so Postgres RLS enforces ownership; queries also
    filter by `owner_id`. Composite foreign keys block cross-user references. No service-role key is used at runtime.
 4. Mutations require a same-origin JSON request and Zod-valid input.
+
+## AI usage control
+
+Keys are read only in `src/server/ai/config.ts` and never sent to the browser (the snapshot carries only
+"available/unavailable"). Every AI call goes through `ledger.ts`:
+
+1. **Admission** when work starts (task claim, CEO request, project run): refused with HTTP 429 if the user is at a
+   monthly budget, monthly token, daily call, or concurrency limit.
+2. **Per-call check** right before sending, with the exact prompt: the worst case counts every prompt byte as a
+   token plus the full 16,000-token output allowance, priced at the higher of the model's price and the refusal
+   fallback's (Claude Opus 4.8). A call that could cross a limit is not sent. Models must be in the allowlist.
+3. **Recording** after the call: tokens per billed attempt (`usage.iterations` when the API returns it), cost from
+   the published price table (`src/lib/pricing.ts`, null when unknown), and the project/task it belongs to.
+4. **Alerts**: crossing the user's alert threshold or 100% writes a warning/error event (shown live and as a banner).
+
+Known bound: two runs of the same user started at the same moment can both pass the check; the overshoot is at
+most the worst case of the calls already in flight (the concurrency limit caps how many). Stage 3 moves the check
+into an atomic database reservation.
+
+## Project deletion
+
+`DELETE /api/projects/:id` (refused while planning or running): remove the project's Storage objects (paths must
+start with the caller's id), then the `files` rows (the database refuses while an object exists), then the project,
+which cascades to tasks and conversations. Usage and activity history are kept. Every step is idempotent, so a
+failed deletion can be retried without orphans; the database also blocks deleting a project that still has files.
 
 ## Execution flow
 
@@ -61,14 +89,15 @@ Files: upload bytes to Storage (RLS path) ─────►   ├─ orchestrat
 
 ### Background runs
 
-Runs started with `after()` reuse the request's access token. A run that outlives the JWT (default one hour) fails
-its next write; work in flight is marked failed on the next local restart only. Stage 3 replaces this with a job
-queue and worker identity scoped per user.
+Runs started with `after()` reuse the request's access token. Before each task and the summary, a run stops
+cleanly (project → failed, "Retomar" continues it) if the token expires within 10 minutes, so writes never fail
+mid-way. If a server dies mid-run, `recover_stale_work` marks work with no progress for `OFFICE_STALE_AFTER_MINUTES`
+as failed on the user's next load, so nothing stays stuck in "running". Stage 3 replaces `after()` with a job queue;
+see [Stage 3 architecture](stage3-architecture.md).
 
 ## Prepared extension points
 
-- **Stage 3 (code execution):** add a `runner` module behind `OfficeContext`; record commands and approvals as new
-  owned tables with the same RLS pattern; conversations already store exact prompts and outputs.
+- **Stage 3 (code execution):** see [Stage 3 architecture](stage3-architecture.md).
 - **Stage 4 (GitHub):** store installation/repository links per user in an owned table; never in `NEXT_PUBLIC_*`.
 - **Stage 5 (research, memory, costs):** `usage_records` and `user_settings.preferences` hold the data for budgets;
   project files in Storage can feed shared memory.

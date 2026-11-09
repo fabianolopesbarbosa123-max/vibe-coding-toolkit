@@ -37,6 +37,8 @@ export interface AuthenticatedUser {
   id: string;
   email: string | null;
   accessToken: string;
+  /** Epoch ms of the access token's expiry. */
+  expiresAt: number | null;
 }
 
 /** Verifies the session JWT (signature and expiry) before trusting the user id. */
@@ -48,5 +50,10 @@ export async function requireUser(): Promise<AuthenticatedUser> {
   const { data: session } = await supabase.auth.getSession();
   const accessToken = session.session?.access_token;
   if (!accessToken) throw new HttpError(401, "Sessão expirada. Entre novamente.");
-  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : null, accessToken };
+  return {
+    id: claims.sub,
+    email: typeof claims.email === "string" ? claims.email : null,
+    accessToken,
+    expiresAt: typeof claims.exp === "number" ? claims.exp * 1000 : null,
+  };
 }

@@ -24,6 +24,9 @@ export interface OfficeStats {
   unpricedCalls: number;
   errors: number;
   usageByAgent: AgentUsage[];
+  /** Estimated USD per project and per task (priced calls only). */
+  costByProject: Record<string, number>;
+  costByTask: Record<string, number>;
 }
 
 export function computeStats(state: OfficeState): OfficeStats {
@@ -43,6 +46,13 @@ export function computeStats(state: OfficeState): OfficeStats {
     if (record.costUsd === null) entry.unpricedCalls++;
     else entry.costUsd += record.costUsd;
     byAgent.set(record.agentId, entry);
+  }
+  const costByProject: Record<string, number> = {};
+  const costByTask: Record<string, number> = {};
+  for (const record of state.usage) {
+    if (record.costUsd === null) continue;
+    if (record.projectId) costByProject[record.projectId] = (costByProject[record.projectId] ?? 0) + record.costUsd;
+    if (record.taskId) costByTask[record.taskId] = (costByTask[record.taskId] ?? 0) + record.costUsd;
   }
   const usageByAgent = [...byAgent.values()].sort((a, b) => b.costUsd - a.costUsd);
   const sum = (key: "calls" | "inputTokens" | "outputTokens" | "costUsd" | "unpricedCalls") =>
@@ -64,5 +74,7 @@ export function computeStats(state: OfficeState): OfficeStats {
     unpricedCalls: sum("unpricedCalls"),
     errors: state.events.filter(event => event.level === "error").length,
     usageByAgent,
+    costByProject,
+    costByTask,
   };
 }
