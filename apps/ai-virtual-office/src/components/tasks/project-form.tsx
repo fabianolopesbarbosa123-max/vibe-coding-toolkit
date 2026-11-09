@@ -5,7 +5,7 @@ import { useOffice } from "@/components/office-provider";
 import { Button, Card, ErrorText, Field, inputClass } from "@/components/ui";
 
 export function ProjectForm() {
-  const { post } = useOffice();
+  const { post, notify } = useOffice();
   const [name, setName] = useState("");
   const [request, setRequest] = useState("");
   const [pending, setPending] = useState(false);
@@ -19,6 +19,7 @@ export function ProjectForm() {
       await post("/api/projects", { name, request });
       setName("");
       setRequest("");
+      notify("Projeto criado.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao criar projeto.");
     } finally {

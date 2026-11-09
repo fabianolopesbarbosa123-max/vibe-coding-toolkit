@@ -5,9 +5,9 @@ import { useOffice } from "@/components/office-provider";
 import { Button, Card, ErrorText, inputClass } from "@/components/ui";
 
 export function CeoRequest() {
-  const { snapshot, post } = useOffice();
+  const { snapshot, post, notify } = useOffice();
   const [request, setRequest] = useState("");
-  const [autoRun, setAutoRun] = useState(true);
+  const [autoRun, setAutoRun] = useState(snapshot?.settings.autoRun ?? true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ceo = snapshot?.agents.find(agent => agent.role === "ceo");
@@ -21,6 +21,7 @@ export function CeoRequest() {
     try {
       await post("/api/orchestrate", { request, autoRun });
       setRequest("");
+      notify("Pedido enviado. O CEO convocou a reunião de planejamento.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao enviar.");
     } finally {

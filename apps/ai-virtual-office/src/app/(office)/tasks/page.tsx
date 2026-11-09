@@ -1,6 +1,7 @@
 "use client";
 
 import { ActivityFeed } from "@/components/activity-feed";
+import { FileManager } from "@/components/files/file-manager";
 import { WithSnapshot } from "@/components/page-state";
 import { ProjectForm } from "@/components/tasks/project-form";
 import { ProjectList } from "@/components/tasks/project-list";
@@ -19,6 +20,7 @@ export default function TasksPage() {
             <TaskForm />
             <div className="grid content-start gap-4">
               <ProjectForm />
+              <FileManager snapshot={snapshot} />
             </div>
             <Card title="Histórico de atividades"><ActivityFeed events={snapshot.events} limit={20} /></Card>
           </div>

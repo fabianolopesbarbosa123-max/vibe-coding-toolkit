@@ -18,8 +18,7 @@ const envSchema = z.object({
   OPENAI_MODEL: optional,
   OPENAI_INPUT_PRICE_PER_MTOK: optionalNumber,
   OPENAI_OUTPUT_PRICE_PER_MTOK: optionalNumber,
-  SUPABASE_URL: optional.pipe(z.url().optional()),
-  SUPABASE_SERVICE_ROLE_KEY: optional,
+  OFFICE_LOCAL_MODE: optional.transform(value => value === "true"),
   OFFICE_DATA_FILE: optional.transform(value => value ?? ".data/office.json"),
 });
 

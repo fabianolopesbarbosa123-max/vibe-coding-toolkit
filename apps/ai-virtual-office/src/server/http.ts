@@ -14,7 +14,7 @@ export class HttpError extends Error {
  * must send a same-origin Origin header and a JSON body (which forces a CORS
  * preflight for other origins).
  */
-export function assertSameOrigin(request: Request) {
+export function assertSameOrigin(request: Request, { requireJson = true }: { requireJson?: boolean } = {}) {
   const origin = request.headers.get("origin");
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   let originHost: string | null = null;
@@ -24,7 +24,7 @@ export function assertSameOrigin(request: Request) {
     originHost = null;
   }
   if (!originHost || originHost !== host) throw new HttpError(403, "Origem não permitida.");
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+  if (requireJson && !request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new HttpError(415, "Envie JSON.");
   }
 }

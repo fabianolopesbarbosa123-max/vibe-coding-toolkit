@@ -21,13 +21,14 @@ const FLOORS: Record<RoomId, string> = {
 const MIN_DESKS: Partial<Record<RoomId, number>> = { planning: 1, programming: 4, research: 2, marketing: 2, support: 2, monitoring: 1 };
 
 interface Props {
+  reducedMotion?: boolean;
   agents: Agent[];
   stats: OfficeStats;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }
 
-export function OfficeMap({ agents, stats, selectedId, onSelect }: Props) {
+export function OfficeMap({ agents, stats, selectedId, onSelect, reducedMotion = false }: Props) {
   const desks = assignDesks(agents);
   const meetingOrder = agents.filter(agent => agent.status === "meeting").map(agent => agent.id);
   const deskCount = new Map<RoomId, number>();
@@ -35,7 +36,7 @@ export function OfficeMap({ agents, stats, selectedId, onSelect }: Props) {
   const workingDesks = new Set(agents.filter(agent => agent.status === "working").map(agent => `${agent.room}:${desks.get(agent.id)}`));
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950 shadow-2xl">
+    <div data-reduced-motion={reducedMotion || undefined} className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-950 shadow-2xl">
       <div
         role="group"
         aria-label="Escritório virtual"

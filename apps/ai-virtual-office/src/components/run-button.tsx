@@ -6,7 +6,7 @@ import { Button } from "@/components/ui";
 
 /** Starts a run and shows the server's reason when it refuses (busy agent, missing integration). */
 export function RunButton({ url, label, disabled }: { url: string; label: string; disabled?: boolean }) {
-  const { post } = useOffice();
+  const { post, notify } = useOffice();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -20,6 +20,7 @@ export function RunButton({ url, label, disabled }: { url: string; label: string
           setError(null);
           try {
             await post(url);
+            notify("Execução iniciada.", "info");
           } catch (err) {
             setError(err instanceof Error ? err.message : "Falha ao iniciar.");
           } finally {

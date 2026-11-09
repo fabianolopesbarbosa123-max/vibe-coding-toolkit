@@ -16,7 +16,7 @@ export default function OfficePage() {
       {snapshot => (
         <div className="grid gap-4 xl:grid-cols-[1fr_340px]">
           <div className="grid min-w-0 gap-4">
-            <OfficeMap agents={snapshot.agents} stats={snapshot.stats} selectedId={selectedId} onSelect={setSelectedId} />
+            <OfficeMap reducedMotion={snapshot.settings.reducedMotion} agents={snapshot.agents} stats={snapshot.stats} selectedId={selectedId} onSelect={setSelectedId} />
             <CeoRequest />
             <Card title="Projetos recentes"><ProjectList projects={snapshot.projects} tasks={snapshot.tasks} limit={4} /></Card>
           </div>

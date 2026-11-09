@@ -10,20 +10,23 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # AI Virtual Office
 
-Next.js 16 (App Router, Cache Components), React 19, strict TypeScript, Tailwind 4, Zod 4, Vitest. Product scope: [PRODUCT.md](PRODUCT.md). Structure: [docs/architecture.md](docs/architecture.md).
+Next.js 16 (App Router, Cache Components, `proxy.ts`), React 19, strict TypeScript, Tailwind 4, Zod 4, Supabase (Auth, Postgres/RLS, Realtime, Storage via `@supabase/ssr`), Vitest. Product scope: [PRODUCT.md](PRODUCT.md). Structure: [docs/architecture.md](docs/architecture.md).
 
 ## Commands
 
 - `npm run dev` — local server bound to 127.0.0.1.
 - `npm run check` — lint, typecheck (`next typegen` + `tsc`), and tests. Run before every commit.
 - `npm run build` — production build.
+- `npm run db:start` / `npm run db:reset` — local Supabase stack (Docker) / re-apply migrations.
+- `npm run test:integration` — RLS, isolation, storage, and realtime tests against the local stack.
 
 ## Rules
 
 - Never simulate AI output. When a provider is not configured, surface it as unavailable (`IntegrationUnavailableError` → HTTP 503).
-- Secrets are read only in `src/server/**` (marked `server-only`). Never use `NEXT_PUBLIC_*` for keys.
+- Secrets are read only in `src/server/**` (marked `server-only`). The Supabase publishable key is the only key allowed in `NEXT_PUBLIC_*`; never add a secret or service-role key to the app.
 - Every mutating route uses `readJson` (same-origin + JSON + Zod) because it can trigger paid API calls.
-- Persistence goes through `getStore()`; keep the file and Supabase stores behaviorally identical, and update `supabase/migrations/` when the domain changes.
+- Route handlers start with `getOfficeContext()` (verifies the session) and pass that context down; persistence goes through `ctx.store`. Keep the file and Supabase stores behaviorally identical.
+- Every new table has `owner_id`, RLS policies scoped to `auth.uid()`, and composite foreign keys for references. Add a new migration file; never edit an applied one. Cover policies in `src/test/integration/`.
 - Public errors use `describeError`; do not echo provider bodies, keys, or request payloads.
 - UI text is pt-BR; code, comments, and docs are English. Keep files under 350 lines.
 - Keep motion compatible with `prefers-reduced-motion`, and keep controls keyboard-accessible.

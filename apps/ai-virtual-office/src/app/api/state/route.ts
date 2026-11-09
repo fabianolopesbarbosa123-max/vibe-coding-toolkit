@@ -1,22 +1,26 @@
 import { connection, NextResponse } from "next/server";
 import type { OfficeSnapshot } from "@/lib/api-types";
 import { computeStats } from "@/lib/stats";
+import { getAccount, listFiles } from "@/server/account";
 import { listIntegrations } from "@/server/ai/providers";
 import { errorResponse } from "@/server/http";
-import { getStore } from "@/server/store";
+import { getOfficeContext } from "@/server/store";
 
 export async function GET() {
   await connection();
   try {
-    const store = getStore();
-    const state = await store.snapshot();
+    const ctx = await getOfficeContext();
+    const [state, account, files] = await Promise.all([ctx.store.snapshot(), getAccount(ctx), listFiles(ctx)]);
     const body: OfficeSnapshot = {
       ...state,
-      integrations: listIntegrations(store.kind),
+      ...account,
+      files,
+      mode: ctx.mode,
+      integrations: listIntegrations(ctx.store.kind),
       stats: computeStats(state),
-      storeKind: store.kind,
+      storeKind: ctx.store.kind,
     };
-    return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(body, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return errorResponse(error);
   }

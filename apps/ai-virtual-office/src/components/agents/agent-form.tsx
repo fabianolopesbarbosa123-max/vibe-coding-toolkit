@@ -18,8 +18,9 @@ const EMPTY: AgentInput = {
 };
 
 export function AgentForm({ agent, onDone }: { agent?: Agent; onDone?: () => void }) {
-  const { post } = useOffice();
-  const [form, setForm] = useState<AgentInput>(agent ? { ...agent } : EMPTY);
+  const { post, notify, snapshot } = useOffice();
+  const empty: AgentInput = { ...EMPTY, provider: snapshot?.settings.defaultProvider ?? EMPTY.provider };
+  const [form, setForm] = useState<AgentInput>(agent ? { ...agent } : empty);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof AgentInput>(key: K) => (event: { target: { value: string } }) =>
@@ -40,10 +41,13 @@ export function AgentForm({ agent, onDone }: { agent?: Agent; onDone?: () => voi
       instructions: form.instructions,
     };
     try {
-      if (agent) await post(`/api/agents/${agent.id}`, body, "PATCH");
-      else {
+      if (agent) {
+        await post(`/api/agents/${agent.id}`, body, "PATCH");
+        notify("Agente atualizado.");
+      } else {
         await post("/api/agents", body);
-        setForm(EMPTY);
+        setForm(empty);
+        notify("Agente cadastrado.");
       }
       onDone?.();
     } catch (err) {

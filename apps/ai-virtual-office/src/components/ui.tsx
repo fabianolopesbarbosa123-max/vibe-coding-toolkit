@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { cloneElement, useId, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 export function Card({ title, action, children, className }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
@@ -44,13 +44,17 @@ export function Badge({ tone = "slate", children }: { tone?: Tone; children: Rea
   return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ring-white/10", TONES[tone])}>{children}</span>;
 }
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+/** Label wraps only its text and control; the hint is linked with aria-describedby. */
+export function Field({ label, children, hint }: { label: string; children: ReactElement<{ "aria-describedby"?: string }>; hint?: string }) {
+  const hintId = useId();
   return (
-    <label className="flex flex-col gap-1 text-sm text-slate-300">
-      <span className="font-medium">{label}</span>
-      {children}
-      {hint && <span className="text-xs text-slate-500">{hint}</span>}
-    </label>
+    <div className="flex flex-col gap-1 text-sm text-slate-300">
+      <label className="flex flex-col gap-1">
+        <span className="font-medium">{label}</span>
+        {hint ? cloneElement(children, { "aria-describedby": hintId }) : children}
+      </label>
+      {hint && <span id={hintId} className="text-xs text-slate-500">{hint}</span>}
+    </div>
   );
 }
 

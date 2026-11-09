@@ -1,21 +1,45 @@
 import "server-only";
 import path from "node:path";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { AuthMode } from "@/lib/domain";
+import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { getEnv } from "../env";
+import { HttpError } from "../http";
+import { createTokenClient, requireUser } from "../supabase";
 import { FileStore } from "./file-store";
 import { SupabaseStore } from "./supabase-store";
 import type { OfficeStore } from "./types";
 
-const globalStore = globalThis as typeof globalThis & { __officeStore?: OfficeStore };
+/** Everything a request (or its background run) needs to act for one user. */
+export interface OfficeContext {
+  mode: AuthMode;
+  userId: string;
+  email: string | null;
+  store: OfficeStore;
+  /** Present in Supabase mode: a client bound to the user's JWT. */
+  supabase: SupabaseClient | null;
+}
 
-/** Supabase when configured; otherwise a local JSON file for development. */
-export function getStore(): OfficeStore {
-  if (globalStore.__officeStore) return globalStore.__officeStore;
+const globalStore = globalThis as typeof globalThis & { __officeFileStore?: FileStore };
+
+export const LOCAL_USER_ID = "local";
+
+/**
+ * Resolves the caller. Supabase mode requires a verified session; local mode is an
+ * explicit single-user development switch (OFFICE_LOCAL_MODE=true).
+ */
+export async function getOfficeContext(): Promise<OfficeContext> {
+  if (isSupabaseConfigured) {
+    const user = await requireUser();
+    const supabase = createTokenClient(user.accessToken);
+    return { mode: "supabase", userId: user.id, email: user.email, store: new SupabaseStore(supabase, user.id), supabase };
+  }
   const env = getEnv();
-  globalStore.__officeStore =
-    env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY
-      ? new SupabaseStore(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY)
-      : new FileStore(path.resolve(/*turbopackIgnore: true*/ process.cwd(), env.OFFICE_DATA_FILE));
-  return globalStore.__officeStore;
+  if (!env.OFFICE_LOCAL_MODE) {
+    throw new HttpError(503, "Configure o Supabase (NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ou ative OFFICE_LOCAL_MODE=true para desenvolvimento.");
+  }
+  globalStore.__officeFileStore ??= new FileStore(path.resolve(/*turbopackIgnore: true*/ process.cwd(), env.OFFICE_DATA_FILE));
+  return { mode: "local", userId: LOCAL_USER_ID, email: null, store: globalStore.__officeFileStore, supabase: null };
 }
 
 export type { OfficeStore } from "./types";

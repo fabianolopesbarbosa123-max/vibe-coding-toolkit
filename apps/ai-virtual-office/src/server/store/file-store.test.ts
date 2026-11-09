@@ -50,3 +50,14 @@ describe("FileStore", () => {
     expect(await new FileStore(await tempFile()).update("tasks", "missing", { title: "x" })).toBeNull();
   });
 });
+
+describe("FileStore.claim", () => {
+  it("lets exactly one concurrent claim win", async () => {
+    const store = new FileStore(await tempFile());
+    await store.snapshot();
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => store.claim("agents", "agent-ceo", "status", ["idle"], { status: "working" })),
+    );
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+});

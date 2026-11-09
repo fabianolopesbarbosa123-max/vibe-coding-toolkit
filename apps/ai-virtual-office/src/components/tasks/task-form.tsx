@@ -7,7 +7,7 @@ import { PRIORITIES, type Priority } from "@/lib/domain";
 import { PRIORITY_LABELS } from "@/lib/labels";
 
 export function TaskForm() {
-  const { snapshot, post } = useOffice();
+  const { snapshot, post, notify } = useOffice();
   const [form, setForm] = useState({ title: "", description: "", agentId: "", priority: "medium" as Priority, projectId: "" });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +21,7 @@ export function TaskForm() {
     try {
       await post("/api/tasks", { ...form, projectId: form.projectId || null });
       setForm(current => ({ ...current, title: "", description: "" }));
+      notify("Tarefa criada.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao criar tarefa.");
     } finally {

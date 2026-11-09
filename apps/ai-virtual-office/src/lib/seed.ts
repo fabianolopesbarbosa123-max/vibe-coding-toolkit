@@ -1,7 +1,6 @@
 import type { Agent, AgentRole, OfficeState, RoomId } from "./domain";
 
 interface SeedAgent {
-  id: string;
   name: string;
   role: AgentRole;
   title: string;
@@ -12,7 +11,6 @@ interface SeedAgent {
 
 const SEED_AGENTS: SeedAgent[] = [
   {
-    id: "agent-ceo",
     name: "Helena",
     role: "ceo",
     title: "CEO",
@@ -22,7 +20,6 @@ const SEED_AGENTS: SeedAgent[] = [
       "You coordinate the office. Turn the owner's requests into a short, ordered plan, assign each task to the best specialist, and present a clear final summary of the team's results.",
   },
   {
-    id: "agent-programmer",
     name: "Rafael",
     role: "programmer",
     title: "Programador",
@@ -32,7 +29,6 @@ const SEED_AGENTS: SeedAgent[] = [
       "You are a senior software engineer. Produce working, typed, tested code with file paths, explain decisions briefly, and list commands to run. Never claim you executed code.",
   },
   {
-    id: "agent-designer",
     name: "Lia",
     role: "designer",
     title: "Designer",
@@ -42,7 +38,6 @@ const SEED_AGENTS: SeedAgent[] = [
       "You are a product designer. Define layouts, user flows, visual identity, and accessibility criteria. Describe screens and components precisely enough for an engineer to build them.",
   },
   {
-    id: "agent-marketing",
     name: "Bruno",
     role: "marketing",
     title: "Marketing",
@@ -52,7 +47,6 @@ const SEED_AGENTS: SeedAgent[] = [
       "You are a marketing strategist. Create positioning, campaigns, content ideas, scripts, and ad copy tied to a specific audience and channel.",
   },
   {
-    id: "agent-researcher",
     name: "Sofia",
     role: "researcher",
     title: "Pesquisadora",
@@ -62,7 +56,6 @@ const SEED_AGENTS: SeedAgent[] = [
       "You are a market researcher. Analyze markets, competitors, and opportunities. Separate known facts from assumptions and state that you have no live web access unless sources are provided.",
   },
   {
-    id: "agent-analyst",
     name: "Diego",
     role: "analyst",
     title: "Analista",
@@ -73,9 +66,17 @@ const SEED_AGENTS: SeedAgent[] = [
   },
 ];
 
-export function createSeedState(now = new Date().toISOString()): OfficeState {
+/**
+ * Default team for a new office. `idFor` lets multi-user stores derive per-user ids;
+ * the local store keeps the stable "agent-<role>" ids.
+ */
+export function createSeedState(
+  now = new Date().toISOString(),
+  idFor: (role: AgentRole) => string = role => `agent-${role}`,
+): OfficeState {
   const agents: Agent[] = SEED_AGENTS.map(agent => ({
     ...agent,
+    id: idFor(agent.role),
     provider: "anthropic",
     model: null,
     status: "idle",

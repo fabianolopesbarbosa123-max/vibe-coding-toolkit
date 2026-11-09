@@ -162,3 +162,78 @@ export const orchestrateInputSchema = z.object({
   request: text(4000),
   autoRun: z.boolean().default(true),
 });
+
+export interface AgentConversation {
+  id: string;
+  agentId: string;
+  projectId: string | null;
+  taskId: string | null;
+  kind: "planning" | "task" | "summary";
+  createdAt: string;
+}
+
+export interface AgentMessage {
+  id: string;
+  conversationId: string;
+  role: "system" | "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export interface OfficeFile {
+  id: string;
+  projectId: string | null;
+  name: string;
+  storagePath: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+}
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  fullName: string;
+}
+
+export interface UserSettings {
+  autoRun: boolean;
+  reducedMotion: boolean;
+  defaultProvider: Provider;
+}
+
+/** "supabase": multi-user with auth; "local": single-user file store for development. */
+export type AuthMode = "supabase" | "local";
+
+export const profilePatchSchema = z.object({
+  fullName: z.string().trim().max(80).optional(),
+  settings: z
+    .object({
+      autoRun: z.boolean(),
+      reducedMotion: z.boolean(),
+      defaultProvider: z.enum(PROVIDERS),
+    })
+    .partial()
+    .optional(),
+});
+
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const ALLOWED_FILE_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  "application/json",
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+] as const;
+
+export const fileInputSchema = z.object({
+  id: z.uuid(),
+  name: z.string().trim().min(1).max(200),
+  storagePath: z.string().max(400),
+  mimeType: z.enum(ALLOWED_FILE_TYPES),
+  sizeBytes: z.number().int().min(0).max(MAX_FILE_BYTES),
+  projectId: z.uuid().nullable().default(null),
+});

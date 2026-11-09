@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { orchestrateInputSchema } from "@/lib/domain";
 import { errorResponse, readJson } from "@/server/http";
 import { claimProject, executeProject, planProject, startOrchestration } from "@/server/orchestrator";
+import { getOfficeContext } from "@/server/store";
 
 export const maxDuration = 800;
 
@@ -9,13 +10,14 @@ export const maxDuration = 800;
 export async function POST(request: Request) {
   try {
     const input = await readJson(request, orchestrateInputSchema);
-    const { project, ceo } = await startOrchestration(input.request);
+    const ctx = await getOfficeContext();
+    const { project, ceo } = await startOrchestration(ctx, input.request);
     after(async () => {
-      const planned = await planProject(project.id, ceo);
+      const planned = await planProject(ctx, project.id, ceo);
       if (!planned || !input.autoRun) return;
       try {
-        await claimProject(project.id);
-        await executeProject(project.id);
+        await claimProject(ctx, project.id);
+        await executeProject(ctx, project.id);
       } catch (error) {
         console.error("Project could not start", error instanceof Error ? error.message : typeof error);
       }
